@@ -69,3 +69,11 @@ https://github.com/LiChenguang6/ms-edge-tts-gui/actions/runs/41080426297
 构建产物：
 https://github.com/LiChenguang6/ms-edge-tts-gui/actions/runs/41080426297/artifacts/12989386657
 后续最终提交仅记录这些结果和下载入口，没有更改受测程序代码。
+
+
+SRT 导入修复：原音频文档导入、批量上传及拖放的格式过滤此前遗漏 `.srt`。
+现在各入口统一解析为字幕文字，逐页导入每条字幕一页，不朗读编号/时间戳。
+主窗口新增直接导入 SRT；导出新增明确的字幕勾选、当前工程/独立 SRT 来源选择。
+独立字幕不覆盖已有配音文稿或真实 TTS 分图时间轴，工程可恢复其路径、内容和开关。
+本轮 Linux 完整 95 项测试通过，包含实际视频帧的有/无字幕对照及 GUI 操作；
+Windows 修复版构建状态请查看 PR 的对应 CI。

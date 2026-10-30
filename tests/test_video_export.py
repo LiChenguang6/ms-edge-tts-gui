@@ -182,3 +182,50 @@ class ExportTests(unittest.TestCase):
                             "-",
                         ]
                     )
+
+    def test_selected_srt_is_optional_and_burned_into_actual_frames(self):
+        self.p.style.update(
+            subtitle_source="srt", font="DejaVu Sans", size=30, margin=20
+        )
+        self.p.subtitle_cues = [dict(start=0, end=2, text="SELECTED SRT")]
+        self.p.cues = [dict(start=0, end=2, text="Unused original")]
+        ass = self.root / "chosen.ass"
+        write_ass(self.p, ass)
+        content = ass.read_text(encoding="utf-8-sig")
+        self.assertIn("SELECTED SRT", content)
+        self.assertNotIn("Unused original", content)
+        frames = []
+        for enabled in (True, False):
+            self.p.style["burn"] = enabled
+            output = self.root / f"captions-{enabled}.mp4"
+            export_video(self.p, output)
+            raw = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-ss",
+                    "0.5",
+                    "-i",
+                    str(output),
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ],
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertEqual(len(raw), 180 * 320 * 3)
+            frames.append(
+                sum(1 for i in range(0, len(raw), 3) if min(raw[i : i + 3]) > 180)
+            )
+        self.assertGreater(frames[0], 30)
+        self.assertEqual(frames[1], 0)
+        self.p.style["burn"] = True
+        self.p.subtitle_cues = []
+        with self.assertRaisesRegex(MediaError, "没有可用字幕"):
+            export_video(self.p, self.root / "missing-subtitle.mp4")

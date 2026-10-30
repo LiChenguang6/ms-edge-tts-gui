@@ -31,7 +31,7 @@ from srt_parser import (
 )
 from timeline_planner import plan_timeline, edit_boundary
 from media_tools import MediaError, ExportCancelled, executable, probe, run_ffmpeg
-from media_merger import export_video
+from media_merger import export_video, subtitle_cues
 
 
 def open_path(path):
@@ -296,6 +296,31 @@ class VideoWorkspace(ctk.CTkFrame):
             text="字幕（真实配音时间轴优先）",
             font=self.app._font(size=15, weight="bold"),
         ).pack(anchor="w", pady=(12, 0))
+        self.subtitle_enabled = tk.BooleanVar(value=self.project.style["burn"])
+        ctk.CTkCheckBox(
+            parent,
+            text="添加字幕到视频（取消勾选则不添加）",
+            variable=self.subtitle_enabled,
+        ).pack(anchor="w", pady=6)
+        self.subtitle_source = tk.StringVar(
+            value=(
+                "选择 SRT 文件"
+                if self.project.style.get("subtitle_source") == "srt"
+                else "当前工程字幕 / TTS 时间轴"
+            )
+        )
+        ctk.CTkOptionMenu(
+            parent,
+            variable=self.subtitle_source,
+            values=["当前工程字幕 / TTS 时间轴", "选择 SRT 文件"],
+        ).pack(fill="x", pady=4)
+        self.button(parent, "选择字幕 SRT…", self.choose_subtitle_srt).pack(
+            fill="x", pady=4
+        )
+        self.subtitle_info = ctk.CTkLabel(
+            parent, text="", wraplength=280, justify="left"
+        )
+        self.subtitle_info.pack(fill="x", pady=4)
         for key, label, options in [
             ("font", "字体名称", None),
             ("size", "字号", None),
@@ -306,7 +331,6 @@ class VideoWorkspace(ctk.CTkFrame):
             ("margin", "垂直边距", None),
             ("alignment", "位置 2底/5中/8顶", ["2", "5", "8"]),
             ("wrap", "自动换行字数", None),
-            ("burn", "烧录字幕", ["True", "False"]),
         ]:
             self.entry(parent, label, "style", key, options)
         self.button(parent, "选择字体文件（可选）", self.choose_font).pack(
@@ -351,6 +375,11 @@ class VideoWorkspace(ctk.CTkFrame):
         ).pack(pady=6)
 
     def collect(self):
+        if hasattr(self, "subtitle_enabled"):
+            self.project.style["burn"] = self.subtitle_enabled.get()
+            self.project.style["subtitle_source"] = (
+                "srt" if self.subtitle_source.get() == "选择 SRT 文件" else "current"
+            )
         updates = {}
         for (group, key), var in self.vars.items():
             old = getattr(self.project, group)[key]
@@ -387,25 +416,24 @@ class VideoWorkspace(ctk.CTkFrame):
             self.vars[("style", "font")].set(family)
 
     def import_srt(self):
-        path = filedialog.askopenfilename(filetypes=[("SRT 字幕", "*.srt")])
+        if self.app._on_import_srt():
+            self.refresh()
+
+    def choose_subtitle_srt(self):
+        path = filedialog.askopenfilename(
+            title="选择视频字幕 SRT", filetypes=[("SRT 字幕", "*.srt")]
+        )
         if not path:
             return
         cues, warnings = read_srt(path)
-        if self.app._busy:
-            raise ValueError("请先停止配音任务，再导入字幕")
-        if self.app._file_batch_active or self.app._pages:
-            raise ValueError("请先回到普通音频模式，再导入 SRT")
-        self.project.source_srt = path
-        self.project.source_cues = deepcopy(cues)
-        self.project.cues = cues
-        self.project.timeline = {}
-        self.app._textbox.delete("1.0", "end")
-        self.app._textbox.insert("1.0", spoken_text(cues))
-        self.app._on_text_changed()
+        self.project.subtitle_srt = path
+        self.project.subtitle_cues = cues
+        self.subtitle_enabled.set(True)
+        self.subtitle_source.set("选择 SRT 文件")
+        self.project.style.update(burn=True, subtitle_source="srt")
         self.refresh()
-        note = "\n".join(
-            warnings + [duration_warning(cues, self.project.audio_duration)]
-        ).strip()
+        warning = duration_warning(cues, self.project.audio_duration)
+        note = "\n".join(warnings + ([warning] if warning else []))
         if note:
             messagebox.showwarning("字幕检查", note, parent=self)
 
@@ -485,6 +513,10 @@ class VideoWorkspace(ctk.CTkFrame):
         return int(selection[0])
 
     def refresh(self):
+        if hasattr(self, "subtitle_info"):
+            self.subtitle_info.configure(
+                text=f'已选 SRT：{Path(self.project.subtitle_srt).name or "未选择"} · {len(self.project.subtitle_cues)} 条字幕\n仅用于视频字幕，不修改原配音文字或图片时间轴。'
+            )
         self.tree.delete(*self.tree.get_children())
         for n, clip in enumerate(self.project.images):
             self.tree.insert(
@@ -700,6 +732,13 @@ class VideoWorkspace(ctk.CTkFrame):
         path = filedialog.askopenfilename(filetypes=[("视频工程", "*.json")])
         if path:
             project = load_project(path)
+            if hasattr(self, "subtitle_enabled"):
+                self.subtitle_enabled.set(project.style["burn"])
+                self.subtitle_source.set(
+                    "选择 SRT 文件"
+                    if project.style.get("subtitle_source") == "srt"
+                    else "当前工程字幕 / TTS 时间轴"
+                )
             self.vars.clear()
             self.app.project = project
             self.app._textbox.delete("1.0", "end")
@@ -722,7 +761,7 @@ class VideoWorkspace(ctk.CTkFrame):
             )
             if not replacement:
                 continue
-            for key in ("audio", "source_srt", "external_video", "bgm"):
+            for key in ("audio", "source_srt", "subtitle_srt", "external_video", "bgm"):
                 if getattr(self.project, key) == missing:
                     setattr(self.project, key, replacement)
             for clip in self.project.images:
@@ -775,7 +814,11 @@ class VideoWorkspace(ctk.CTkFrame):
             if snapshot.images and not snapshot.external_video
             else snapshot.audio_duration
         )
-        warning = duration_warning(snapshot.cues, snapshot.audio_duration)
+        warning = (
+            duration_warning(subtitle_cues(snapshot), snapshot.audio_duration)
+            if snapshot.style["burn"] and not silent
+            else ""
+        )
         if (
             warning
             and not silent

@@ -71,5 +71,47 @@ class WorkspaceTests(unittest.TestCase):
                 window._show_studio("audio")
                 window.update()
                 self.assertTrue(window._btn_generate.winfo_exists())
+                self._assert_srt_inputs(window, root)
             finally:
                 window._on_close()
+
+    def _assert_srt_inputs(self, window, root):
+        from media_merger import subtitle_cues
+        from project_manager import save_project, load_project
+
+        srt = root / "独立字幕.srt"
+        srt.write_text(
+            "1\n00:00:00,000 --> 00:00:02,000\n独立字幕。\n", encoding="utf-8-sig"
+        )
+        with patch("app.filedialog.askopenfilename", return_value=str(srt)):
+            self.assertTrue(window._on_import_srt())
+        self.assertEqual(window._textbox.get("1.0", "end").strip(), "独立字幕。")
+        window._textbox.delete("1.0", "end")
+        window._textbox.insert("1.0", "已有配音文稿")
+        original_cues = list(window.project.cues)
+        window._show_studio("export")
+        window.update()
+        workspace = window._video_workspace
+        with patch("video_workspace.filedialog.askopenfilename", return_value=str(srt)):
+            workspace.choose_subtitle_srt()
+        self.assertEqual(window._textbox.get("1.0", "end").strip(), "已有配音文稿")
+        self.assertEqual(window.project.cues, original_cues)
+        self.assertEqual(subtitle_cues(window.project)[0]["text"], "独立字幕。")
+        workspace.subtitle_enabled.set(False)
+        workspace.collect()
+        filename = root / "字幕工程.json"
+        save_project(window.project, filename)
+        restored = load_project(filename)
+        self.assertFalse(restored.style["burn"])
+        self.assertEqual(restored.subtitle_srt, str(srt))
+        # Reopening a project must not inherit the previous workspace's checkbox.
+        workspace.subtitle_enabled.set(True)
+        with patch(
+            "video_workspace.filedialog.askopenfilename", return_value=str(filename)
+        ):
+            workspace.open_project()
+        self.assertFalse(window._video_workspace.subtitle_enabled.get())
+        window._show_studio("audio")
+        window._add_batch_files([str(srt)])
+        self.assertEqual(len(window._file_items), 1)
+        self.assertNotIn("-->", window._file_items[0].text)

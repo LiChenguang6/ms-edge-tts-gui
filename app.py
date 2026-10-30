@@ -501,7 +501,7 @@ class App(ctk.CTk):
         "batch_help": {"zh": "规则配置", "en": "Rule Guide"},
         "batch_exit": {"zh": "退出批量", "en": "Exit Batch"},
         "batch_import_title": {"zh": "批量添加文本文件", "en": "Add text files in batch"},
-        "batch_import_hint": {"zh": "可拖入多个文件，或点击下方按钮选择多个文件。支持 txt / md / docx / pdf。", "en": "Drop multiple files here, or choose multiple files below. Supports txt / md / docx / pdf."},
+        "batch_import_hint": {"zh": "可拖入多个文件，或点击下方按钮选择多个文件。支持 txt / md / docx / pdf / srt。", "en": "Drop multiple files here, or choose multiple files below. Supports txt / md / docx / pdf / srt."},
         "batch_drop_ready": {"zh": "拖入文件到这里", "en": "Drop files here"},
         "batch_drop_unavailable": {"zh": "当前环境未启用拖拽，请使用“选择多个文件”。", "en": "Drag and drop is unavailable here; use “Choose files” instead."},
         "batch_choose_files": {"zh": "选择多个文件", "en": "Choose Files"},
@@ -942,6 +942,7 @@ class App(ctk.CTk):
         ctk.CTkButton(controls, text=self._t("github_star"), width=104, height=30, font=self._font(size=12, weight="bold"), fg_color=self._c("star"), hover_color=self._c("star_hover"), border_width=1, border_color=self._c("warning"), text_color=self._c("warning"), command=lambda: webbrowser.open(REPOSITORY_URL)).pack(side="left", padx=2)
         ctk.CTkButton(controls, text=self._t("settings_short"), width=52, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._show_settings).pack(side="left", padx=(6, 2))
         ctk.CTkButton(controls, text=self._t("check_updates"), width=78, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._on_check_updates).pack(side="left", padx=2)
+        ctk.CTkButton(controls, text="导入 SRT", width=78, height=30, command=self._on_import_srt).pack(side="left", padx=2)
         theme_text = self._t("theme_dark") if self._theme == "dark" else self._t("theme_light")
         ctk.CTkButton(controls, text=theme_text, width=52, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._switch_theme).pack(side="left", padx=2)
         ctk.CTkButton(controls, text=self._t("language"), width=40, height=30, font=self._font(size=12, weight="bold"), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._switch_language).pack(side="left", padx=(2, 0))
@@ -2282,6 +2283,35 @@ class App(ctk.CTk):
             self.log(f"[任务] 失败：{result.get('error', '未知错误')}")
             self._show_generation_failure(result)
 
+    def _on_import_srt(self):
+        from copy import deepcopy
+        from srt_parser import read_srt, spoken_text, duration_warning
+        if self._busy or self._file_batch_active or self._pages:
+            messagebox.showwarning(APP_NAME, "请先停止生成并回到普通文本模式；批量配音请使用批量上传 SRT。")
+            return False
+        path = filedialog.askopenfilename(filetypes=[("SRT 字幕", "*.srt")])
+        if not path:
+            return False
+        try:
+            cues, warnings = read_srt(path)
+        except Exception as exc:
+            messagebox.showerror("SRT 导入失败", str(exc))
+            return False
+        self.project.source_srt = path
+        self.project.source_cues = deepcopy(cues)
+        self.project.cues = cues
+        self.project.timeline = {}
+        self._textbox.delete("1.0", "end")
+        self._textbox.insert("1.0", spoken_text(cues))
+        self._on_text_changed()
+        warning = duration_warning(cues, self.project.audio_duration)
+        if warning:
+            warnings.append(warning)
+        if warnings:
+            messagebox.showwarning("字幕检查", "\n".join(warnings))
+        self.log(f"[SRT] 已导入 {len(cues)} 条字幕，朗读内容不包含编号和时间戳。")
+        return True
+
     def _capture_video_audio(self, path, timeline):
         from project_manager import capture_tts_audio
         try:
@@ -2482,7 +2512,7 @@ class App(ctk.CTk):
                 else "导入文档，逐页旁白配音"
             ),
             filetypes=[
-                ("Documents (txt / md / docx / pdf)" if is_english else "文档（txt / md / docx / pdf）", "*.txt *.md *.markdown *.docx *.pdf"),
+                ("Documents (txt / md / docx / pdf / srt)" if is_english else "文档（txt / md / docx / pdf / srt）", "*.txt *.md *.markdown *.docx *.pdf *.srt"),
                 ("All files" if is_english else "所有文件", "*.*"),
             ],
         )
@@ -2648,10 +2678,10 @@ class App(ctk.CTk):
                 title=self._t("batch_import_title"),
                 filetypes=[
                     (
-                        "Documents (txt / md / docx / pdf)"
+                        "Documents (txt / md / docx / pdf / srt)"
                         if self._language == "en"
-                        else "文档（txt / md / docx / pdf）",
-                        "*.txt *.md *.markdown *.docx *.pdf",
+                        else "文档（txt / md / docx / pdf / srt）",
+                        "*.txt *.md *.markdown *.docx *.pdf *.srt",
                     ),
                     ("All files" if self._language == "en" else "所有文件", "*.*"),
                 ],
@@ -2729,7 +2759,7 @@ class App(ctk.CTk):
                 skipped += 1
                 continue
             ext = os.path.splitext(path)[1].lower()
-            if ext not in (".txt", ".md", ".markdown", ".docx", ".pdf"):
+            if ext not in (".txt", ".md", ".markdown", ".docx", ".pdf", ".srt"):
                 skipped += 1
                 self.log(self._t("batch_import_unsupported", name=os.path.basename(path)))
                 continue

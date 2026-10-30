@@ -21,6 +21,14 @@ def _color(value):
     return "&H00" + value[5:7] + value[3:5] + value[1:3]
 
 
+def subtitle_cues(project):
+    return (
+        project.subtitle_cues
+        if project.style.get("subtitle_source") == "srt"
+        else project.cues
+    )
+
+
 def write_ass(project, path, width=None, height=None):
     style = project.style
     w, h = width or project.video["width"], height or project.video["height"]
@@ -52,7 +60,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     wrap = int(style["wrap"])
     if not 1 <= wrap <= 200:
         raise MediaError("自动换行字数需为 1–200")
-    for cue in project.cues:
+    for cue in subtitle_cues(project):
         text = re.sub(r"<[^>]*>", "", str(cue["text"]))
         # Treat imported text literally, never as ASS override tags or escapes.
         text = (
@@ -76,6 +84,7 @@ def validate_output(project, output):
     inputs = [
         project.audio,
         project.source_srt,
+        project.subtitle_srt,
         project.external_video,
         project.bgm,
         project.style.get("font_file", ""),
@@ -92,6 +101,10 @@ def export_video(
     project, output, cancel=None, progress=None, preview=False, silent=False
 ):
     output = validate_output(project, output)
+    if not silent and project.style["burn"] and not subtitle_cues(project):
+        raise MediaError(
+            "已勾选添加字幕，但没有可用字幕。请选择 SRT、生成配音字幕，或取消添加字幕。"
+        )
     if project.missing_media():
         raise MediaError(
             "缺失素材，请重新定位：\n" + "\n".join(project.missing_media())
@@ -165,7 +178,7 @@ def export_video(
             ratio = min(1, 480 / max(w, h))
             w, h = max(2, round(w * ratio / 2) * 2), max(2, round(h * ratio / 2) * 2)
         vf += f",scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
-        if project.style["burn"] and project.cues:
+        if project.style["burn"] and subtitle_cues(project):
             write_ass(project, root / "captions.ass")
             font_file = project.style.get("font_file", "")
             if font_file:

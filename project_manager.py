@@ -25,6 +25,8 @@ class Project:
     audio: str = ""
     audio_duration: float = 0
     source_srt: str = ""
+    subtitle_srt: str = ""
+    subtitle_cues: list = field(default_factory=list)
     source_cues: list = field(default_factory=list)
     cues: list = field(default_factory=list)
     timeline: dict = field(default_factory=dict)
@@ -60,6 +62,7 @@ class Project:
             margin=100,
             alignment=2,
             burn=True,
+            subtitle_source="current",
             wrap=22,
         )
     )
@@ -96,7 +99,14 @@ def save_project(project, filename):
         except ValueError:  # Different Windows drives.
             return str(Path(path).resolve())
 
-    for key in ("audio", "source_srt", "external_video", "bgm", "output_dir"):
+    for key in (
+        "audio",
+        "source_srt",
+        "subtitle_srt",
+        "external_video",
+        "bgm",
+        "output_dir",
+    ):
         data[key] = relative(data[key])
     data["style"]["font_file"] = relative(data["style"].get("font_file", ""))
     for image in data["images"]:
@@ -124,7 +134,14 @@ def load_project(filename):
     def absolute(path):
         return str((source.parent / path).resolve()) if path else ""
 
-    for key in ("audio", "source_srt", "external_video", "bgm", "output_dir"):
+    for key in (
+        "audio",
+        "source_srt",
+        "subtitle_srt",
+        "external_video",
+        "bgm",
+        "output_dir",
+    ):
         data[key] = absolute(data.get(key, ""))
     data["style"]["font_file"] = absolute(data["style"].get("font_file", ""))
     data["images"] = [

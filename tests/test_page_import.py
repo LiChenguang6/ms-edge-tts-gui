@@ -9,7 +9,9 @@ from page_import import import_lines, split_text_into_lines, split_text_into_pag
 
 class LineImportTests(unittest.TestCase):
     def test_splits_every_non_empty_line(self):
-        pages = split_text_into_lines("  first line  \r\n\r\nsecond line\n   \nthird line")
+        pages = split_text_into_lines(
+            "  first line  \r\n\r\nsecond line\n   \nthird line"
+        )
 
         self.assertEqual([page.index for page in pages], [1, 2, 3])
         self.assertEqual(
@@ -37,9 +39,13 @@ class PageImportTests(unittest.TestCase):
         )
 
     def test_explicit_chinese_page_markers_are_exact(self):
-        pages = split_text_into_pages("第一页\n\n[分页]\n\n第二页\n第二句\n[分页]\n第三页")
+        pages = split_text_into_pages(
+            "第一页\n\n[分页]\n\n第二页\n第二句\n[分页]\n第三页"
+        )
 
-        self.assertEqual([page.text for page in pages], ["第一页", "第二页\n第二句", "第三页"])
+        self.assertEqual(
+            [page.text for page in pages], ["第一页", "第二页\n第二句", "第三页"]
+        )
 
     def test_explicit_english_page_markers_are_exact(self):
         pages = split_text_into_pages("Page one\n[PAGE]\nPage two")
@@ -50,6 +56,28 @@ class PageImportTests(unittest.TestCase):
         pages = split_text_into_pages("第一页。[分页] 第二页。")
 
         self.assertEqual([page.text for page in pages], ["第一页。", "第二页。"])
+
+
+class SrtDocumentImportTests(unittest.TestCase):
+    def test_all_document_modes_accept_srt_without_reading_timestamps(self):
+        from page_import import import_file, read_document_text, SUPPORTED_EXTS
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "字幕.SRT"
+            path.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n第一行\n第二行。\n\n2\n00:00:01,000 --> 00:00:02,000\nSecond!\n",
+                encoding="utf-8-sig",
+            )
+            self.assertIn(".srt", SUPPORTED_EXTS)
+            self.assertEqual(read_document_text(str(path)), "第一行\n第二行。\nSecond!")
+            self.assertEqual(
+                [p.text for p in import_file(str(path))],
+                ["第一行\n第二行。", "Second!"],
+            )
+            self.assertEqual(
+                [p.text for p in import_lines(str(path))],
+                ["第一行", "第二行。", "Second!"],
+            )
 
 
 if __name__ == "__main__":
