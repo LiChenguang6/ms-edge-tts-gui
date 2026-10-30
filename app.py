@@ -54,6 +54,7 @@ from tts_engine import (
     validate_pause_ms,
 )
 from text_utils import clean_text, default_filename, normalize_for_tts
+from srt_dubbing import dub_srt, read_srt
 from update_checker import ReleaseInfo, UpdateCheckResult, check_for_updates
 from voice_groups import (
     GENDER_ALL,
@@ -297,6 +298,7 @@ class App(ctk.CTk):
         self._btn_sentence_pause = None
         self._btn_dub_pages = None
         self._btn_result_preview = None
+        self._btn_srt_dub = None
         self._mode_settings_title = None
         self._mode_settings_hint = None
         self._pause_label = None
@@ -334,6 +336,7 @@ class App(ctk.CTk):
 
     TRANSLATIONS = {
         "app": {"zh": "Edge TTS 语音合成助手", "en": "Edge TTS Voice Studio"},
+        "srt_dub": {"zh": "从 SRT 按时间轴配音", "en": "Dub from SRT timestamps"},
         "open": {"zh": "开源 · GPL-3.0-or-later", "en": "Open Source · GPL-3.0-or-later"},
         "open_badge": {"zh": "免费 · 开源", "en": "Free · Open Source"},
         "github_repo": {"zh": "GitHub 仓库", "en": "GitHub"},
@@ -1441,6 +1444,14 @@ class App(ctk.CTk):
         self._btn_save.grid(row=2, column=1, sticky="ew", padx=(4, 0))
         self._btn_result_preview = ctk.CTkButton(actions, text=self._t("result_preview"), command=self._open_result_preview, height=30, font=self._font(size=12, weight="bold"), fg_color="transparent", hover_color=self._c("card_raised"), border_width=1, border_color=self._c("border"), text_color=self._c("accent"))
         self._btn_result_preview.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self._btn_srt_dub = ctk.CTkButton(
+            actions, text=self._t("srt_dub"), command=self._on_srt_dub,
+            height=30, font=self._font(size=12, weight="bold"),
+            fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"),
+            border_width=1, border_color=self._c("border"),
+            text_color=self._c("accent"),
+        )
+        self._btn_srt_dub.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self._configure_highlight_tag()
         self._sync_generated_status()
         self._update_generated_buttons()
@@ -1606,6 +1617,16 @@ class App(ctk.CTk):
             self._on_task_done(item[1], item[2])
         elif kind == "batch_done":
             self._on_batch_done(item[1])
+        elif kind == "srt_progress":
+            done, total, rate = item[1:]
+            self._progress.set(done / total)
+            self._status_label.configure(text=(
+                f"SRT dubbing {done}/{total} · rate {rate:+d}%"
+                if self._language == "en"
+                else f"SRT 配音 {done}/{total} 条 · 当前语速 {rate:+d}%"
+            ))
+        elif kind == "srt_done":
+            self._on_srt_done(item[1])
         elif kind == "result_row_done":
             self._on_result_row_done(item[1], item[2])
         elif kind == "stall_clear":
@@ -2157,6 +2178,101 @@ class App(ctk.CTk):
             line_pause_enabled=self._line_pause_enabled and self._workflow_mode == "line",
             line_pause_ms=self._line_pause_ms if self._line_pause_enabled and self._workflow_mode == "line" else 0,
         )
+
+    def _on_srt_dub(self):
+        """Import SRT and compose one MP3 on its original subtitle timeline."""
+        if self._busy:
+            messagebox.showinfo(APP_NAME, "已有任务进行中，请先停止当前任务。")
+            return
+        source = filedialog.askopenfilename(
+            parent=self,
+            title="选择 SRT 字幕 / Choose SRT subtitles",
+            filetypes=[("SubRip subtitles", "*.srt"), ("All files", "*.*")],
+        )
+        if not source:
+            return
+        try:
+            cues = read_srt(source)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(APP_NAME, f"SRT 导入失败：{exc}")
+            return
+        destination = filedialog.asksaveasfilename(
+            parent=self,
+            title="导出按时间轴对齐的 MP3 / Save aligned MP3",
+            defaultextension=".mp3",
+            initialfile=Path(source).stem + "_dubbed.mp3",
+            filetypes=[("MP3 audio", "*.mp3")],
+        )
+        if not destination:
+            return
+        cfg = self._build_cfg()
+        self._busy = True
+        self._cancel_event = threading.Event()
+        self._set_busy_ui(True)
+        self._progress.configure(mode="determinate")
+        self._progress.set(0)
+        self._status_label.configure(
+            text=(f"SRT dubbing: {len(cues)} cues…" if self._language == "en"
+                  else f"正在按 SRT 时间轴配音：共 {len(cues)} 条…"),
+            text_color=self._c("accent"),
+        )
+        threading.Thread(
+            target=self._worker_srt_dub,
+            args=(cues, destination, cfg, self._cancel_event),
+            daemon=True,
+        ).start()
+
+    def _worker_srt_dub(self, cues, destination, cfg, cancel_event):
+        try:
+            result = dub_srt(
+                cues, destination, cfg,
+                cancel_event=cancel_event,
+                on_progress=lambda done, total, rate: self._ui_q.put(
+                    ("srt_progress", done, total, rate)
+                ),
+                on_log=lambda message: self._ui_q.put(("log", message)),
+            )
+        except UserCanceled:
+            result = {"status": "canceled"}
+        except Exception as exc:  # noqa: BLE001
+            result = {"status": "error", "error": str(exc)}
+        self._ui_q.put(("srt_done", result))
+
+    def _on_srt_done(self, result):
+        self._busy = False
+        self._set_busy_ui(False)
+        status = result.get("status")
+        if status == "done":
+            self._progress.set(1)
+            self._status_label.configure(
+                text=("SRT dubbing complete" if self._language == "en"
+                      else "SRT 配音完成"), text_color=self._c("success")
+            )
+            changes = result.get("speed_changes") or []
+            note = (
+                f"\n有 {len(changes)} 条字幕自动加快了语速。"
+                if changes else ""
+            )
+            messagebox.showinfo(
+                APP_NAME,
+                f"已生成对齐时间轴的 MP3：\n{result['path']}\n"
+                f"字幕总长 {result['duration_seconds']:.2f} 秒，"
+                f"共 {result['cues']} 条。{note}\n"
+                "原始 SRT 文件没有被修改。"
+            )
+            self.log(f"[SRT 配音] 已保存：{result['path']}")
+            self._maybe_open_folder(result["path"])
+        elif status == "canceled":
+            self._status_label.configure(
+                text=("SRT dubbing canceled" if self._language == "en"
+                      else "SRT 配音已取消"), text_color=self._c("warning")
+            )
+        else:
+            self._status_label.configure(
+                text=("SRT dubbing failed" if self._language == "en"
+                      else "SRT 配音失败"), text_color=self._c("danger")
+            )
+            messagebox.showerror(APP_NAME, f"SRT 配音失败：\n{result.get('error', '未知错误')}")
 
     def _start_task(self, text, output_path, mode):
         if self._busy:
@@ -5691,6 +5807,8 @@ class App(ctk.CTk):
             self._mode_selector.configure(state="disabled" if busy else "normal")
         if self._btn_import is not None:
             self._btn_import.configure(state="disabled" if busy else "normal")
+        if self._btn_srt_dub is not None:
+            self._btn_srt_dub.configure(state="disabled" if busy else "normal")
         if self._btn_download_example is not None:
             self._btn_download_example.configure(state="disabled" if busy else "normal")
         if self._btn_sentence_pause is not None:
