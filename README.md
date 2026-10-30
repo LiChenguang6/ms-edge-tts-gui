@@ -6,7 +6,9 @@
 - [中文使用指南、架构与打包说明](VIDEO_STUDIO_GUIDE.zh-CN.md)
 - [分阶段开发及验证记录](VIDEO_STUDIO_DEVELOPMENT.md)
 
-Windows EXE 构建待 Windows CI 验证；以下保留原项目说明和作者署名。
+Windows CI 已通过 93 项测试及 onedir/onefile EXE 构建和启动检查。
+[下载 Windows 构建产物](https://github.com/LiChenguang6/ms-edge-tts-gui/actions/runs/41080426297/artifacts/12989386657)（需登录 GitHub）。
+目标 Windows 11 的声卡、NVENC 和安装卸载仍需实机验收。以下保留原项目说明和作者署名。
 
 ---
 

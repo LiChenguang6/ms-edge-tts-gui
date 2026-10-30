@@ -61,3 +61,11 @@ https://github.com/LiChenguang6/ms-edge-tts-gui/actions/runs/41079737345
 日志确认 `Ran 93 tests ... OK`，onedir 与 onefile 均构建完成并通过真实启动检查，
 Windows 构建产物已上传。后续提交的准确验证状态以 PR 当前检查为准；
 这仍不替代目标 Windows 11 电脑的声卡、NVENC 和安装/卸载验收。
+
+
+最终功能代码 `bdc38d3` 的 Windows CI 已通过：
+https://github.com/LiChenguang6/ms-edge-tts-gui/actions/runs/41080426297
+完整 93 项测试（零跳过）、onedir/onefile 编译与两个 EXE 的启动检查均成功。
+构建产物：
+https://github.com/LiChenguang6/ms-edge-tts-gui/actions/runs/41080426297/artifacts/12989386657
+后续最终提交仅记录这些结果和下载入口，没有更改受测程序代码。
