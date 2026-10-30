@@ -31,6 +31,9 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
+from project_manager import Project
+from video_workspace import VideoWorkspace
+
 from batch_text_config import (
     build_tts_header,
     build_voice_alias_index,
@@ -70,7 +73,7 @@ from page_import import (
     split_text_into_lines,
 )
 
-APP_NAME = "Edge TTS 语音合成助手"
+APP_NAME = "Edge TTS 视频创作助手"
 APP_VERSION = "1.7.2"
 DEVELOPER = "WangYufan"
 DEVELOPER_QQ = "1471056247"
@@ -324,6 +327,9 @@ class App(ctk.CTk):
         self._stall_popover_label = None
         self._stall_popover_hide_after = None
 
+        self.project = Project()
+        self._studio_mode = "audio"
+        self._video_workspace = None
         self._build_ui()
         self._bind_events()
 
@@ -333,7 +339,7 @@ class App(ctk.CTk):
     # ============================================================ UI 构建
 
     TRANSLATIONS = {
-        "app": {"zh": "Edge TTS 语音合成助手", "en": "Edge TTS Voice Studio"},
+        "app": {"zh": "Edge TTS 视频创作助手", "en": "Edge TTS Video Studio"},
         "open": {"zh": "开源 · GPL-3.0-or-later", "en": "Open Source · GPL-3.0-or-later"},
         "open_badge": {"zh": "免费 · 开源", "en": "Free · Open Source"},
         "github_repo": {"zh": "GitHub 仓库", "en": "GitHub"},
@@ -707,7 +713,7 @@ class App(ctk.CTk):
             pass
 
     def _show_settings(self):
-        if self._busy:
+        if self._busy or (self._video_workspace is not None and getattr(self._video_workspace, "running", False)):
             messagebox.showinfo(self._app_name(), "Please stop the current task first." if self._language == "en" else "请先停止当前任务。")
             return
         is_english = self._language == "en"
@@ -839,7 +845,7 @@ class App(ctk.CTk):
         self.after(150, self._poll_ui)
 
     def _switch_theme(self):
-        if self._busy:
+        if self._busy or (self._video_workspace is not None and getattr(self._video_workspace, "running", False)):
             messagebox.showinfo(self._app_name(), "Please stop the current task first." if self._language == "en" else "请先停止当前任务。")
             return
         self._theme = "light" if self._theme == "dark" else "dark"
@@ -849,7 +855,7 @@ class App(ctk.CTk):
         self._rebuild_ui()
 
     def _switch_language(self):
-        if self._busy:
+        if self._busy or (self._video_workspace is not None and getattr(self._video_workspace, "running", False)):
             messagebox.showinfo(self._app_name(), "Please stop the current task first." if self._language == "en" else "请先停止当前任务。")
             return
         self._language = "en" if self._language == "zh" else "zh"
@@ -867,6 +873,7 @@ class App(ctk.CTk):
         self._build_log()
         self._build_footer()
         self._build_stall_popover()
+        self._show_studio(self._studio_mode)
 
     def _build_stall_popover(self):
         self._stall_popover = ctk.CTkFrame(
@@ -929,7 +936,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(header, text=self._t("tagline"), text_color=self._c("muted"), font=self._font(size=12)).grid(row=1, column=1, sticky="nw", pady=(0, 13))
 
         controls = ctk.CTkFrame(header, fg_color="transparent")
-        controls.grid(row=0, column=2, rowspan=2, sticky="e", padx=14, pady=12)
+        controls.grid(row=2, column=0, columnspan=3, sticky="e", padx=14, pady=(0, 8))
         ctk.CTkLabel(controls, text=self._t("open_badge"), width=98, height=30, corner_radius=15, fg_color=self._c("star"), text_color=self._c("warning"), font=self._font(size=12, weight="bold")).pack(side="left", padx=(0, 6))
         ctk.CTkButton(controls, text=self._t("github_repo"), width=92, height=30, font=self._font(size=12, weight="bold"), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), border_width=1, border_color=self._c("border"), text_color=self._c("accent"), command=lambda: webbrowser.open(REPOSITORY_URL)).pack(side="left", padx=2)
         ctk.CTkButton(controls, text=self._t("github_star"), width=104, height=30, font=self._font(size=12, weight="bold"), fg_color=self._c("star"), hover_color=self._c("star_hover"), border_width=1, border_color=self._c("warning"), text_color=self._c("warning"), command=lambda: webbrowser.open(REPOSITORY_URL)).pack(side="left", padx=2)
@@ -938,6 +945,24 @@ class App(ctk.CTk):
         theme_text = self._t("theme_dark") if self._theme == "dark" else self._t("theme_light")
         ctk.CTkButton(controls, text=theme_text, width=52, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._switch_theme).pack(side="left", padx=2)
         ctk.CTkButton(controls, text=self._t("language"), width=40, height=30, font=self._font(size=12, weight="bold"), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._switch_language).pack(side="left", padx=(2, 0))
+        values = ['音频生成', '图拼视频', '合成导出'] if self._language == 'zh' else ['Audio', 'Images', 'Export']
+        self._studio_values = dict(zip(values, ('audio', 'images', 'export')))
+        self._studio_nav = ctk.CTkSegmentedButton(header, values=values, width=270,
+            command=lambda value: self._show_studio(self._studio_values[value]))
+        self._studio_nav.grid(row=0, column=2, rowspan=2, padx=12, pady=8, sticky='e')
+
+    def _show_studio(self, mode):
+        self._studio_mode = mode
+        self._studio_nav.set(next(k for k, v in self._studio_values.items() if v == mode))
+        self._audio_workspace.grid_remove()
+        if self._video_workspace is not None:
+            self._video_workspace.destroy()
+            self._video_workspace = None
+        if mode == 'audio':
+            self._audio_workspace.grid()
+        else:
+            self._video_workspace = VideoWorkspace(self, mode)
+
     def _badge(self, master, text, color):
         return ctk.CTkLabel(master, text=text, text_color=color, font=self._font(size=12, weight="bold"))
 
@@ -952,6 +977,7 @@ class App(ctk.CTk):
 
     def _build_workspace(self):
         workspace = ctk.CTkFrame(self, fg_color="transparent")
+        self._audio_workspace = workspace
         workspace.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 10))
         workspace.grid_columnconfigure(0, weight=1)
         workspace.grid_columnconfigure(1, weight=0)
