@@ -749,6 +749,7 @@ class VideoWorkspace(SceneWorkspaceMixin, ctk.CTkFrame):
             "重新排序", "将替换当前手动顺序。继续？", parent=self
         ):
             return
+        previous = [c.scene_id for c in self.project.images]
         sort_images(
             self.project,
             dict(
@@ -759,6 +760,10 @@ class VideoWorkspace(SceneWorkspaceMixin, ctk.CTkFrame):
             )[self.sort_var.get()],
             True,
         )
+        if self.project.mode == "scenes" and previous != [
+            c.scene_id for c in self.project.images
+        ]:
+            invalidate_scene_audio(self.project)
         self.refresh()
 
     def reorder(self, index, destination):

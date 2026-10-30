@@ -269,6 +269,23 @@ class SceneTests(unittest.TestCase):
         )
         self.assertEqual(len(FakeEngine.calls), previous)
 
+        from types import SimpleNamespace
+        from video_workspace import VideoWorkspace
+
+        view = SimpleNamespace(
+            project=p,
+            sort_var=SimpleNamespace(get=lambda: "自然数字"),
+            refresh=lambda: None,
+        )
+        VideoWorkspace.sort(view)
+        self.assertEqual(p.audio, "")
+        self.assertEqual([c.scene_id for c in p.images], ["001", "002", "003"])
+        prepare_scene_audio(
+            p, TTSConfig(), engine_factory=FakeEngine, request_interval=0
+        )
+        self.assertEqual(len(FakeEngine.calls), previous)
+        self.assertEqual(p.cues[0]["scene_id"], "001")
+
     def test_bounded_thumbnail_cache(self):
         p = self.project(50)
         cache = ThumbnailCache(limit=4)
