@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from tts_engine import TTSConfig, UserCanceled
 from srt_dubbing import (
-    SRTCue, SRTDurationError, dub_srt, parse_srt, read_srt, trim_edge_silence,
+    SRTCue, SRTDurationError, dub_srt, parse_srt, read_srt, read_srt_text, trim_edge_silence,
 )
 
 
@@ -41,6 +41,14 @@ class ParseSRTTests(unittest.TestCase):
             parse_srt("1\n00:00:02,000 --> 00:00:01,000\nA")
         with self.assertRaises(ValueError):
             parse_srt("not a subtitle")
+
+    def test_editable_srt_source_preserves_timestamps(self):
+        content = "1\n00:00:02,500 --> 00:00:05,750\n我的视频解说"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "字幕.srt"
+            path.write_text(content, encoding="utf-8")
+            self.assertEqual(read_srt_text(path), content)
+            self.assertEqual(parse_srt(read_srt_text(path))[0].start_ms, 2500)
 
     def test_utf16_and_gb18030_files(self):
         srt = "1\n00:00:01,000 --> 00:00:02,000\n中文配音"
@@ -94,6 +102,12 @@ class DubSRTTests(unittest.TestCase):
             )
         self.assertEqual(result["status"], "done")
         self.assertEqual(result["duration_seconds"], 5.0)
+        self.assertEqual(result["timeline"]["boundary"], "SRT")
+        self.assertEqual(result["timeline"]["duration"], 5.0)
+        self.assertEqual(len(result["timeline"]["sentences"]), 2)
+        self.assertEqual(result["timeline"]["sentences"][0]["start"], 1.0)
+        self.assertEqual(result["timeline"]["sentences"][0]["srt_end"], 2.0)
+        self.assertAlmostEqual(result["timeline"]["sentences"][1]["end"], 4.5, places=3)
         self.assertEqual(progress, [(1, 2), (2, 2)])
         self.assertTrue(self.output.stat().st_size > 100)
         self.assertEqual(self.rates, ["+0%", "+0%"])
