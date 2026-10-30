@@ -46,7 +46,7 @@ class ParseSRTTests(unittest.TestCase):
         content = "1\n00:00:02,500 --> 00:00:05,750\n我的视频解说"
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "字幕.srt"
-            path.write_text(content, encoding="utf-8")
+            path.write_bytes(content.encode("utf-8"))
             self.assertEqual(read_srt_text(path), content)
             self.assertEqual(parse_srt(read_srt_text(path))[0].start_ms, 2500)
 
