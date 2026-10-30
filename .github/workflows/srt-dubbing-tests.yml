@@ -7,6 +7,11 @@ on:
       - "feature/srt-timed-dubbing"
   workflow_dispatch:
 
+# Cancel obsolete test builds after new edits to this feature branch.
+concurrency:
+  group: srt-dubbing-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
