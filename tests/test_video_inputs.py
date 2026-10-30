@@ -28,6 +28,11 @@ class InputTests(unittest.TestCase):
             self.assertNotIn("-->", spoken_text(cues))
             self.assertTrue(duration_warning(cues, 8))
             self.assertEqual(duration_warning(cues, 0), "")
+            for encoding in ("utf-16", "gb18030"):
+                for ending in ("", "\n"):
+                    with self.subTest(encoding=encoding, ending=ending):
+                        p.write_bytes((SRT + ending).encode(encoding))
+                        self.assertEqual(read_srt(p)[0], cues)
 
     def test_invalid_and_overlap(self):
         with self.assertRaises(ValueError):

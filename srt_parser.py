@@ -46,7 +46,12 @@ def parse_srt(text):
 
 def read_srt(path):
     raw = Path(path).read_bytes()
-    for encoding in ("utf-8-sig", "utf-16", "gb18030"):
+    encodings = (
+        ("utf-16",)
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff"))
+        else ("utf-8-sig", "gb18030")
+    )
+    for encoding in encodings:
         try:
             return parse_srt(raw.decode(encoding))
         except UnicodeError:

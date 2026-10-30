@@ -10,7 +10,7 @@
 | 3 | 完整句末 DP、时长约束、锁定边界、单图/不足点处理、FFmpeg 分段渲染 | 40 秒 5 图等规划测试通过 |
 | 4 | TTS 持久副本、真实时间轴、ASS 字幕、配音/BGM、原子输出与取消 | 真实媒体流水线测试通过 |
 | 5 | 图片导入/目录/拖放、排序编辑、字幕关联、吸附、参数表单、工程重开、低分辨率预览 | 实际 Xorg 窗口操作通过 |
-| 6 | 中文指南、Windows 启动/打包脚本、PR 构建 CI、EXE 冒烟入口 | Linux 下完整 93 项测试通过，零跳过；Windows 待 CI |
+| 6 | 中文指南、Windows 启动/打包脚本、PR 构建 CI、EXE 冒烟入口 | Linux 下完整 93 项测试通过，零跳过；Windows 首轮 CI 亦已通过（见补充） |
 
 ## 实际执行证据
 
@@ -54,3 +54,10 @@ GUI 回归：创建实际窗口，导入 BOM SRT、写入原音频输入框、�
 该云 Python 自带 Tcl/Tk 9，首次冻结启动缺少 `libtcl9.0.so`/`libtcl9tk9.0.so`；
 使用 PyInstaller 支持的 `--add-binary <实际库路径>:.` 显式收集这两个库后通过。
 这属于本机 Linux 工具链差异，不把 Linux 库路径写入 Windows 构建脚本。
+
+
+Windows 首轮 CI（提交 `3142f6c`）已经实际通过：
+https://github.com/LiChenguang6/ms-edge-tts-gui/actions/runs/41079737345
+日志确认 `Ran 93 tests ... OK`，onedir 与 onefile 均构建完成并通过真实启动检查，
+Windows 构建产物已上传。后续提交的准确验证状态以 PR 当前检查为准；
+这仍不替代目标 Windows 11 电脑的声卡、NVENC 和安装/卸载验收。
