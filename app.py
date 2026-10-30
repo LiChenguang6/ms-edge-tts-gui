@@ -952,6 +952,16 @@ class App(ctk.CTk):
         self._studio_nav.grid(row=0, column=2, rowspan=2, padx=12, pady=8, sticky='e')
 
     def _show_studio(self, mode):
+        if self._video_workspace is not None and self._video_workspace.running:
+            self._studio_nav.set(next(k for k,v in self._studio_values.items() if v == self._studio_mode))
+            messagebox.showinfo(APP_NAME, "请等待或取消当前导出任务。")
+            return
+        if self._video_workspace is not None:
+            try:
+                self._video_workspace.collect()
+            except ValueError as exc:
+                messagebox.showerror(APP_NAME, str(exc))
+                return
         self._studio_mode = mode
         self._studio_nav.set(next(k for k, v in self._studio_values.items() if v == mode))
         self._audio_workspace.grid_remove()
@@ -5743,6 +5753,10 @@ class App(ctk.CTk):
         self._update_generated_buttons()
 
     def _on_close(self):
+        if self._video_workspace is not None and self._video_workspace.running:
+            self._video_workspace.cancel.set()
+            self.after(150, self._on_close)
+            return
         self._persist_ui_settings()
         self._cancel_event.set()
         self._stop_playback()
@@ -5787,4 +5801,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) == 3 and sys.argv[1] == "--smoke-test":
+        from packaging_smoke import run
+        run(sys.argv[2])
+    else:
+        main()

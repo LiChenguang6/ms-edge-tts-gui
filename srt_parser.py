@@ -70,7 +70,7 @@ def sentence_boundaries(cues, duration, trusted=False):
 
 
 def duration_warning(cues, duration):
-    if cues and abs(max(c['end'] for c in cues) - duration) > max(0.5, duration * 0.03):
+    if duration > 0 and cues and abs(max(c['end'] for c in cues) - duration) > max(0.5, duration * 0.03):
         return f'字幕结束 {max(c["end"] for c in cues):.2f}s，配音 {duration:.2f}s；请检查或手动同步字幕。'
     return ''
 
