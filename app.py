@@ -46,6 +46,7 @@ from tts_engine import (
     StallController,
     TTSConfig,
     TTSEngine,
+    UserCanceled,
     detect_proxy,
     insert_sentence_pause_directives,
     list_tts_voices,
