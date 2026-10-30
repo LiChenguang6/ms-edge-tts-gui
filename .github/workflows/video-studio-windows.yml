@@ -1,0 +1,54 @@
+name: Video Studio Windows validation
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies and local media tools
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          choco install ffmpeg -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify tools and run full tests including real MP4 exports
+        shell: pwsh
+        run: |
+          ffmpeg -version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ffprobe -version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build onedir then onefile and verify actual startup
+        shell: pwsh
+        run: |
+          foreach ($layout in @('onedir', 'onefile')) {
+            $name = if ($layout -eq 'onedir') { 'EdgeTTSGui' } else { 'EdgeTTSGui-Portable' }
+            python -m PyInstaller --noconfirm --clean "--$layout" --windowed --name $name --icon assets/app.ico --collect-all customtkinter --collect-all tkinterdnd2 --hidden-import docx --hidden-import pypdf --hidden-import miniaudio --hidden-import lameenc --hidden-import cffi --hidden-import _cffi_backend app.py
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $exe = if ($layout -eq 'onedir') { 'dist/EdgeTTSGui/EdgeTTSGui.exe' } else { 'dist/EdgeTTSGui-Portable.exe' }
+            $report = Join-Path $env:RUNNER_TEMP "$name-smoke.json"
+            Remove-Item $report -ErrorAction SilentlyContinue
+            $process = Start-Process -FilePath $exe -ArgumentList @('--smoke-test', "`"$report`"") -PassThru
+            if (-not $process.WaitForExit(120000)) { $process.Kill(); throw 'Executable startup timed out' }
+            if ($process.ExitCode -ne 0) { throw 'Executable startup failed' }
+            $result = Get-Content $report -Raw | ConvertFrom-Json
+            if ($result.status -ne 'passed') { throw 'Missing startup readiness report' }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EdgeTTSVideoStudio-Windows
+          path: dist/

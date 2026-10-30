@@ -31,6 +31,9 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
+from project_manager import Project
+from video_workspace import VideoWorkspace
+
 from batch_text_config import (
     build_tts_header,
     build_voice_alias_index,
@@ -70,7 +73,7 @@ from page_import import (
     split_text_into_lines,
 )
 
-APP_NAME = "Edge TTS 语音合成助手"
+APP_NAME = "Edge TTS 视频创作助手"
 APP_VERSION = "1.7.2"
 DEVELOPER = "WangYufan"
 DEVELOPER_QQ = "1471056247"
@@ -96,7 +99,7 @@ def saved_int(settings: dict, key: str, default: int) -> int:
         return int(settings.get(key, default))
     except (TypeError, ValueError):
         return default
-UI_FONT_FALLBACKS = ("Microsoft YaHei", "SimHei", "Arial")
+UI_FONT_FALLBACKS = ("Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Noto Serif CJK SC", "Arial")
 SETTINGS_DIR = Path(os.environ.get("APPDATA", Path.home())) / "EdgeTTSGui"
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 PREVIEW_FILENAME = "edge_tts_preview.mp3"
@@ -324,6 +327,9 @@ class App(ctk.CTk):
         self._stall_popover_label = None
         self._stall_popover_hide_after = None
 
+        self.project = Project()
+        self._studio_mode = "audio"
+        self._video_workspace = None
         self._build_ui()
         self._bind_events()
 
@@ -333,7 +339,7 @@ class App(ctk.CTk):
     # ============================================================ UI 构建
 
     TRANSLATIONS = {
-        "app": {"zh": "Edge TTS 语音合成助手", "en": "Edge TTS Voice Studio"},
+        "app": {"zh": "Edge TTS 视频创作助手", "en": "Edge TTS Video Studio"},
         "open": {"zh": "开源 · GPL-3.0-or-later", "en": "Open Source · GPL-3.0-or-later"},
         "open_badge": {"zh": "免费 · 开源", "en": "Free · Open Source"},
         "github_repo": {"zh": "GitHub 仓库", "en": "GitHub"},
@@ -495,7 +501,7 @@ class App(ctk.CTk):
         "batch_help": {"zh": "规则配置", "en": "Rule Guide"},
         "batch_exit": {"zh": "退出批量", "en": "Exit Batch"},
         "batch_import_title": {"zh": "批量添加文本文件", "en": "Add text files in batch"},
-        "batch_import_hint": {"zh": "可拖入多个文件，或点击下方按钮选择多个文件。支持 txt / md / docx / pdf。", "en": "Drop multiple files here, or choose multiple files below. Supports txt / md / docx / pdf."},
+        "batch_import_hint": {"zh": "可拖入多个文件，或点击下方按钮选择多个文件。支持 txt / md / docx / pdf / srt。", "en": "Drop multiple files here, or choose multiple files below. Supports txt / md / docx / pdf / srt."},
         "batch_drop_ready": {"zh": "拖入文件到这里", "en": "Drop files here"},
         "batch_drop_unavailable": {"zh": "当前环境未启用拖拽，请使用“选择多个文件”。", "en": "Drag and drop is unavailable here; use “Choose files” instead."},
         "batch_choose_files": {"zh": "选择多个文件", "en": "Choose Files"},
@@ -707,7 +713,7 @@ class App(ctk.CTk):
             pass
 
     def _show_settings(self):
-        if self._busy:
+        if self._busy or (self._video_workspace is not None and getattr(self._video_workspace, "running", False)):
             messagebox.showinfo(self._app_name(), "Please stop the current task first." if self._language == "en" else "请先停止当前任务。")
             return
         is_english = self._language == "en"
@@ -839,7 +845,7 @@ class App(ctk.CTk):
         self.after(150, self._poll_ui)
 
     def _switch_theme(self):
-        if self._busy:
+        if self._busy or (self._video_workspace is not None and getattr(self._video_workspace, "running", False)):
             messagebox.showinfo(self._app_name(), "Please stop the current task first." if self._language == "en" else "请先停止当前任务。")
             return
         self._theme = "light" if self._theme == "dark" else "dark"
@@ -849,7 +855,7 @@ class App(ctk.CTk):
         self._rebuild_ui()
 
     def _switch_language(self):
-        if self._busy:
+        if self._busy or (self._video_workspace is not None and getattr(self._video_workspace, "running", False)):
             messagebox.showinfo(self._app_name(), "Please stop the current task first." if self._language == "en" else "请先停止当前任务。")
             return
         self._language = "en" if self._language == "zh" else "zh"
@@ -867,6 +873,7 @@ class App(ctk.CTk):
         self._build_log()
         self._build_footer()
         self._build_stall_popover()
+        self._show_studio(self._studio_mode)
 
     def _build_stall_popover(self):
         self._stall_popover = ctk.CTkFrame(
@@ -929,15 +936,46 @@ class App(ctk.CTk):
         ctk.CTkLabel(header, text=self._t("tagline"), text_color=self._c("muted"), font=self._font(size=12)).grid(row=1, column=1, sticky="nw", pady=(0, 13))
 
         controls = ctk.CTkFrame(header, fg_color="transparent")
-        controls.grid(row=0, column=2, rowspan=2, sticky="e", padx=14, pady=12)
+        controls.grid(row=2, column=0, columnspan=3, sticky="e", padx=14, pady=(0, 8))
         ctk.CTkLabel(controls, text=self._t("open_badge"), width=98, height=30, corner_radius=15, fg_color=self._c("star"), text_color=self._c("warning"), font=self._font(size=12, weight="bold")).pack(side="left", padx=(0, 6))
         ctk.CTkButton(controls, text=self._t("github_repo"), width=92, height=30, font=self._font(size=12, weight="bold"), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), border_width=1, border_color=self._c("border"), text_color=self._c("accent"), command=lambda: webbrowser.open(REPOSITORY_URL)).pack(side="left", padx=2)
         ctk.CTkButton(controls, text=self._t("github_star"), width=104, height=30, font=self._font(size=12, weight="bold"), fg_color=self._c("star"), hover_color=self._c("star_hover"), border_width=1, border_color=self._c("warning"), text_color=self._c("warning"), command=lambda: webbrowser.open(REPOSITORY_URL)).pack(side="left", padx=2)
         ctk.CTkButton(controls, text=self._t("settings_short"), width=52, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._show_settings).pack(side="left", padx=(6, 2))
         ctk.CTkButton(controls, text=self._t("check_updates"), width=78, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._on_check_updates).pack(side="left", padx=2)
+        ctk.CTkButton(controls, text="导入 SRT", width=78, height=30, command=self._on_import_srt).pack(side="left", padx=2)
         theme_text = self._t("theme_dark") if self._theme == "dark" else self._t("theme_light")
         ctk.CTkButton(controls, text=theme_text, width=52, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._switch_theme).pack(side="left", padx=2)
         ctk.CTkButton(controls, text=self._t("language"), width=40, height=30, font=self._font(size=12, weight="bold"), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._switch_language).pack(side="left", padx=(2, 0))
+        values = ['音频生成', '图拼视频', '合成导出'] if self._language == 'zh' else ['Audio', 'Images', 'Export']
+        self._studio_values = dict(zip(values, ('audio', 'images', 'export')))
+        self._studio_nav = ctk.CTkSegmentedButton(header, values=values, width=270,
+            command=lambda value: self._show_studio(self._studio_values[value]))
+        self._studio_nav.grid(row=0, column=2, rowspan=2, padx=12, pady=8, sticky='e')
+
+    def _show_studio(self, mode):
+        if self._video_workspace is not None and self._video_workspace.running:
+            self._studio_nav.set(next(k for k,v in self._studio_values.items() if v == self._studio_mode))
+            messagebox.showinfo(APP_NAME, "请等待或取消当前导出任务。")
+            return
+        if self._video_workspace is not None:
+            try:
+                self._video_workspace.collect()
+            except ValueError as exc:
+                messagebox.showerror(APP_NAME, str(exc))
+                return
+        self._studio_mode = mode
+        self._studio_nav.set(next(k for k, v in self._studio_values.items() if v == mode))
+        self._audio_workspace.grid_remove()
+        if self._video_workspace is not None:
+            self._video_workspace.destroy()
+            self._video_workspace = None
+        if mode == 'audio':
+            self._activity_frame.grid()
+            self._audio_workspace.grid()
+        else:
+            self._activity_frame.grid_remove()
+            self._video_workspace = VideoWorkspace(self, mode)
+
     def _badge(self, master, text, color):
         return ctk.CTkLabel(master, text=text, text_color=color, font=self._font(size=12, weight="bold"))
 
@@ -952,6 +990,7 @@ class App(ctk.CTk):
 
     def _build_workspace(self):
         workspace = ctk.CTkFrame(self, fg_color="transparent")
+        self._audio_workspace = workspace
         workspace.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 10))
         workspace.grid_columnconfigure(0, weight=1)
         workspace.grid_columnconfigure(1, weight=0)
@@ -1473,6 +1512,7 @@ class App(ctk.CTk):
 
     def _build_log(self):
         log_frame = ctk.CTkFrame(self, corner_radius=18, fg_color=self._c("surface"), border_width=1, border_color=self._c("border"))
+        self._activity_frame = log_frame
         log_frame.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 8))
         log_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(log_frame, text=self._t("log"), text_color=self._c("text"), font=self._font(size=13, weight="bold")).grid(row=0, column=0, sticky="w", padx=16, pady=(9, 2))
@@ -2216,6 +2256,7 @@ class App(ctk.CTk):
             self._generated_path = path
             self._generated_text = generated_text
             self._generated_timeline = result.get("timeline")
+            self._capture_video_audio(path, self._generated_timeline)
             if self._pages:
                 page = self._pages[self._page_index]
                 self._generated_pages[self._page_index + 1] = {
@@ -2241,6 +2282,43 @@ class App(ctk.CTk):
             self._status_label.configure(text=self._t("failed"), text_color="#f7768e")
             self.log(f"[任务] 失败：{result.get('error', '未知错误')}")
             self._show_generation_failure(result)
+
+    def _on_import_srt(self):
+        from copy import deepcopy
+        from srt_parser import read_srt, spoken_text, duration_warning
+        if self._busy or self._file_batch_active or self._pages:
+            messagebox.showwarning(APP_NAME, "请先停止生成并回到普通文本模式；批量配音请使用批量上传 SRT。")
+            return False
+        path = filedialog.askopenfilename(filetypes=[("SRT 字幕", "*.srt")])
+        if not path:
+            return False
+        try:
+            cues, warnings = read_srt(path)
+        except Exception as exc:
+            messagebox.showerror("SRT 导入失败", str(exc))
+            return False
+        self.project.source_srt = path
+        self.project.source_cues = deepcopy(cues)
+        self.project.cues = cues
+        self.project.timeline = {}
+        self._textbox.delete("1.0", "end")
+        self._textbox.insert("1.0", spoken_text(cues))
+        self._on_text_changed()
+        warning = duration_warning(cues, self.project.audio_duration)
+        if warning:
+            warnings.append(warning)
+        if warnings:
+            messagebox.showwarning("字幕检查", "\n".join(warnings))
+        self.log(f"[SRT] 已导入 {len(cues)} 条字幕，朗读内容不包含编号和时间戳。")
+        return True
+
+    def _capture_video_audio(self, path, timeline):
+        from project_manager import capture_tts_audio
+        try:
+            capture_tts_audio(self.project, path, timeline, SETTINGS_DIR / 'video-media')
+            self.log('[视频工程] 已保留独立配音、真实时间轴和 SRT。')
+        except Exception as exc:
+            self.log(f'[视频工程] 保存配音失败：{exc}')
 
     def _show_generation_failure(self, result: dict) -> None:
         message = result.get("error", "未知错误")
@@ -2434,7 +2512,7 @@ class App(ctk.CTk):
                 else "导入文档，逐页旁白配音"
             ),
             filetypes=[
-                ("Documents (txt / md / docx / pdf)" if is_english else "文档（txt / md / docx / pdf）", "*.txt *.md *.markdown *.docx *.pdf"),
+                ("Documents (txt / md / docx / pdf / srt)" if is_english else "文档（txt / md / docx / pdf / srt）", "*.txt *.md *.markdown *.docx *.pdf *.srt"),
                 ("All files" if is_english else "所有文件", "*.*"),
             ],
         )
@@ -2600,10 +2678,10 @@ class App(ctk.CTk):
                 title=self._t("batch_import_title"),
                 filetypes=[
                     (
-                        "Documents (txt / md / docx / pdf)"
+                        "Documents (txt / md / docx / pdf / srt)"
                         if self._language == "en"
-                        else "文档（txt / md / docx / pdf）",
-                        "*.txt *.md *.markdown *.docx *.pdf",
+                        else "文档（txt / md / docx / pdf / srt）",
+                        "*.txt *.md *.markdown *.docx *.pdf *.srt",
                     ),
                     ("All files" if self._language == "en" else "所有文件", "*.*"),
                 ],
@@ -2681,7 +2759,7 @@ class App(ctk.CTk):
                 skipped += 1
                 continue
             ext = os.path.splitext(path)[1].lower()
-            if ext not in (".txt", ".md", ".markdown", ".docx", ".pdf"):
+            if ext not in (".txt", ".md", ".markdown", ".docx", ".pdf", ".srt"):
                 skipped += 1
                 self.log(self._t("batch_import_unsupported", name=os.path.basename(path)))
                 continue
@@ -5708,6 +5786,10 @@ class App(ctk.CTk):
         self._update_generated_buttons()
 
     def _on_close(self):
+        if self._video_workspace is not None and self._video_workspace.running:
+            self._video_workspace.cancel.set()
+            self.after(150, self._on_close)
+            return
         self._persist_ui_settings()
         self._cancel_event.set()
         self._stop_playback()
@@ -5752,4 +5834,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) == 3 and sys.argv[1] == "--smoke-test":
+        from packaging_smoke import run
+        run(sys.argv[2])
+    else:
+        main()

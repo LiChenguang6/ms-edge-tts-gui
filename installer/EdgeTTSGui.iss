@@ -6,7 +6,7 @@
 ; SPDX-License-Identifier: GPL-3.0-or-later
 ; ============================================================
 
-#define MyAppName "Edge TTS 语音合成助手"
+#define MyAppName "Edge TTS 视频创作助手"
 #ifndef MyAppVersion
 #define MyAppVersion "1.7.2"
 #endif

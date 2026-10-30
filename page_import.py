@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2026 WangYufan (QQ 1471056247)
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""文件导入与分页：把 txt/md/docx/pdf 转成逐页/逐行旁白结构。
+"""文件导入与分页：把 txt/md/docx/pdf/srt 转成逐页/逐行旁白结构。
 
 每个 Page = 一条旁白：text 会朗读（可编辑），note 是备注（不朗读）。
 - 普通模式：读取完整文本，不分页。
@@ -15,6 +15,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import List
+from srt_parser import read_srt, spoken_text
 
 
 @dataclass
@@ -25,7 +26,7 @@ class Page:
     title: str = ""
 
 
-SUPPORTED_EXTS = (".txt", ".md", ".markdown", ".docx", ".pdf")
+SUPPORTED_EXTS = (".txt", ".md", ".markdown", ".docx", ".pdf", ".srt")
 DEFAULT_MAX_CHARS = 1000
 PAGE_BREAK_PATTERN = re.compile(
     r"(?:\[分页\]|\[page\]|---\s*(?:分页|page break)\s*---)",
@@ -38,12 +39,20 @@ def import_file(path: str, max_chars: int = DEFAULT_MAX_CHARS) -> List[Page]:
     ext = os.path.splitext(path)[1].lower()
     if ext in (".txt", ".md", ".markdown"):
         pages = split_text_into_pages(_read_text(path), max_chars)
+    elif ext == ".srt":
+        cues, _warnings = read_srt(path)
+        pages = [
+            Page(i + 1, spoken_text([cue]), "", _page_title(cue["text"]))
+            for i, cue in enumerate(cues)
+        ]
     elif ext == ".docx":
         pages = split_text_into_pages(_read_docx_text(path), max_chars)
     elif ext == ".pdf":
         pages = _import_pdf(path)
     else:
-        raise ValueError("不支持的格式：%s（支持 txt / md / docx / pdf）" % (ext or "未知"))
+        raise ValueError(
+            "不支持的格式：%s（支持 txt / md / docx / pdf / srt）" % (ext or "未知")
+        )
     result = [p for p in pages if (p.text or "").strip()]
     if not result:
         raise ValueError("文件中没有可用的文字内容（PDF 可能是扫描件，无法提取文字）。")
@@ -55,12 +64,16 @@ def read_document_text(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
     if ext in (".txt", ".md", ".markdown"):
         text = _read_text(path)
+    elif ext == ".srt":
+        text = spoken_text(read_srt(path)[0])
     elif ext == ".docx":
         text = _read_docx_text(path)
     elif ext == ".pdf":
         text = "\n\n".join(_read_pdf_page_texts(path))
     else:
-        raise ValueError("不支持的格式：%s（支持 txt / md / docx / pdf）" % (ext or "未知"))
+        raise ValueError(
+            "不支持的格式：%s（支持 txt / md / docx / pdf / srt）" % (ext or "未知")
+        )
     text = (text or "").strip()
     if not text:
         raise ValueError("文件中没有可用的文字内容（PDF 可能是扫描件，无法提取文字）。")
@@ -81,10 +94,16 @@ def split_text_into_pages(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> List
     if not text:
         return []
     if PAGE_BREAK_PATTERN.search(text):
-        raw_pages = [part.strip() for part in PAGE_BREAK_PATTERN.split(text) if part.strip()]
-        return [Page(i + 1, page, "", _page_title(page)) for i, page in enumerate(raw_pages)]
+        raw_pages = [
+            part.strip() for part in PAGE_BREAK_PATTERN.split(text) if part.strip()
+        ]
+        return [
+            Page(i + 1, page, "", _page_title(page)) for i, page in enumerate(raw_pages)
+        ]
     blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
-    return [Page(i + 1, block, "", _page_title(block)) for i, block in enumerate(blocks)]
+    return [
+        Page(i + 1, block, "", _page_title(block)) for i, block in enumerate(blocks)
+    ]
 
 
 def split_text_into_lines(text: str) -> List[Page]:
@@ -147,5 +166,7 @@ def _read_text(path: str) -> str:
 
 
 def _page_title(text: str) -> str:
-    first = next((line.strip() for line in (text or "").splitlines() if line.strip()), "")
+    first = next(
+        (line.strip() for line in (text or "").splitlines() if line.strip()), ""
+    )
     return first[:40] if first else ""
