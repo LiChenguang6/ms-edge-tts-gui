@@ -497,7 +497,7 @@ class App(ctk.CTk):
         "batch_help": {"zh": "规则配置", "en": "Rule Guide"},
         "batch_exit": {"zh": "退出批量", "en": "Exit Batch"},
         "batch_import_title": {"zh": "批量添加文本文件", "en": "Add text files in batch"},
-        "batch_import_hint": {"zh": "可拖入多个文件，或点击下方按钮选择多个文件。支持 txt / md / docx / pdf。", "en": "Drop multiple files here, or choose multiple files below. Supports txt / md / docx / pdf."},
+        "batch_import_hint": {"zh": "可拖入多个文件，或点击下方按钮选择多个文件。支持 txt / md / docx / pdf / srt。", "en": "Drop multiple files here, or choose multiple files below. Supports txt / md / docx / pdf / srt."},
         "batch_drop_ready": {"zh": "拖入文件到这里", "en": "Drop files here"},
         "batch_drop_unavailable": {"zh": "当前环境未启用拖拽，请使用“选择多个文件”。", "en": "Drag and drop is unavailable here; use “Choose files” instead."},
         "batch_choose_files": {"zh": "选择多个文件", "en": "Choose Files"},
