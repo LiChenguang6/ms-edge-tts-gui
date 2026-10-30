@@ -20,7 +20,7 @@ import tempfile
 import threading
 from typing import Callable, Sequence
 
-from tts_engine import TTSConfig, TTSEngine, UserCanceled
+from tts_engine import TTSConfig, TTSEngine, UserCanceled, audio_duration_seconds
 
 
 SAMPLE_RATE = 24000
@@ -81,16 +81,21 @@ def parse_srt(content: str) -> list[SRTCue]:
     return cues
 
 
-def read_srt(path: str | Path) -> list[SRTCue]:
+def read_srt_text(path: str | Path) -> str:
+    """Read subtitle source without dropping its timestamps or formatting."""
     data = Path(path).read_bytes()
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return parse_srt(data.decode("utf-16"))
+        return data.decode("utf-16")
     for encoding in ("utf-8-sig", "gb18030"):
         try:
-            return parse_srt(data.decode(encoding))
+            return data.decode(encoding)
         except UnicodeDecodeError:
             continue
     raise ValueError("无法识别 SRT 文件编码，请保存为 UTF-8。")
+
+
+def read_srt(path: str | Path) -> list[SRTCue]:
+    return parse_srt(read_srt_text(path))
 
 
 def trim_edge_silence(pcm: bytes, sample_rate: int = SAMPLE_RATE) -> bytes:
@@ -191,6 +196,7 @@ def dub_srt(
     )
     os.close(fd)
     speed_changes = []
+    timeline_entries = []
     try:
         with tempfile.TemporaryDirectory(prefix="edge-srt-") as segment_dir:
             encoder = lameenc.Encoder()
@@ -253,6 +259,15 @@ def dub_srt(
                         log(f"第 {cue.index} 条超过字幕时长，尝试语速 {_as_rate(rate)}")
                     if rate != requested_rate:
                         speed_changes.append((cue.index, rate))
+                    timeline_entries.append({
+                        "index": position - 1,
+                        "source_index": cue.index,
+                        "text": cue.text,
+                        "start": round(start_frame / SAMPLE_RATE, 4),
+                        "end": round((start_frame + len(pcm) // 2) / SAMPLE_RATE, 4),
+                        "srt_end": round(cue.end_ms / 1000, 4),
+                        "rate": _as_rate(rate),
+                    })
                     output.write(encoder.encode(pcm))
                     current_frame += len(pcm) // 2
                     progress(position, len(cues), rate)
@@ -263,8 +278,19 @@ def dub_srt(
         if stop.is_set():
             raise UserCanceled()
         os.replace(temp_output, destination)
+        try:
+            physical_duration = audio_duration_seconds(str(destination))
+        except Exception:  # Audio is already saved; metadata fallback is safe.
+            physical_duration = cues[-1].end_ms / 1000
+        timeline = {
+            "boundary": "SRT",
+            "sentences": timeline_entries,
+            "duration": cues[-1].end_ms / 1000,
+            "audio_duration": round(physical_duration, 4),
+        }
         return {
             "status": "done",
+            "timeline": timeline,
             "path": str(destination),
             "cues": len(cues),
             "duration_seconds": cues[-1].end_ms / 1000,
