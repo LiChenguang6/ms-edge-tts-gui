@@ -2,6 +2,7 @@
 from collections import OrderedDict
 from pathlib import Path
 import re
+import threading
 from PIL import Image, ImageOps
 from project_manager import ImageClip
 
@@ -54,10 +55,15 @@ class ThumbnailCache:
     """Bounded LRU; decode one source at a time, retain only tiny thumbnails."""
 
     def __init__(self, limit=64):
+        self.lock = threading.RLock()
         self.limit = limit
         self.cache = OrderedDict()
 
     def get(self, path, size=(240, 160)):
+        with self.lock:
+            return self._get(path, size)
+
+    def _get(self, path, size):
         p = Path(path)
         key = (str(p.resolve()), p.stat().st_mtime_ns, size)
         if key not in self.cache:

@@ -53,6 +53,11 @@ for %%E in ("dist\EdgeTTSGui\EdgeTTSGui.exe" "dist\EdgeTTSGui-Portable.exe") do 
     if not exist "%TEMP%\EdgeTTSGui-smoke.json" exit /b 1
 )
 
+copy /Y "SCENE_PROJECT_GUIDE.zh-CN.md" "dist\SCENE_PROJECT_GUIDE.zh-CN.md" >nul
+copy /Y "LICENSE" "dist\LICENSE" >nul
+copy /Y "NOTICE" "dist\NOTICE" >nul
+xcopy /E /I /Y "examples" "dist\examples" >nul
+
  echo Building installer...
 "%ISCC%" "installer\EdgeTTSGui.iss"
 if errorlevel 1 exit /b 1

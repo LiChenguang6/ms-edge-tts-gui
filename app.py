@@ -31,7 +31,8 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
-from project_manager import Project
+from project_manager import Project, new_project
+from global_settings import config_dir
 from video_workspace import VideoWorkspace
 
 from batch_text_config import (
@@ -100,7 +101,7 @@ def saved_int(settings: dict, key: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
 UI_FONT_FALLBACKS = ("Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Noto Serif CJK SC", "Arial")
-SETTINGS_DIR = Path(os.environ.get("APPDATA", Path.home())) / "EdgeTTSGui"
+SETTINGS_DIR = config_dir()
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 PREVIEW_FILENAME = "edge_tts_preview.mp3"
 BATCH_ITEM_DELAY = 1.5        # 批量配音每项之间的间隔，避免连续请求被服务端限流
@@ -327,7 +328,7 @@ class App(ctk.CTk):
         self._stall_popover_label = None
         self._stall_popover_hide_after = None
 
-        self.project = Project()
+        self.project = new_project()
         self._studio_mode = "audio"
         self._video_workspace = None
         self._build_ui()
@@ -697,7 +698,8 @@ class App(ctk.CTk):
     def _save_settings(self):
         try:
             SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-            SETTINGS_FILE.write_text(json.dumps(self._settings, ensure_ascii=False, indent=2), encoding="utf-8")
+            from global_settings import atomic_json
+            atomic_json(SETTINGS_FILE, self._settings)
         except OSError as exc:
             self.log(f"[设置] 保存失败：{exc}")
 
@@ -943,6 +945,7 @@ class App(ctk.CTk):
         ctk.CTkButton(controls, text=self._t("settings_short"), width=52, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._show_settings).pack(side="left", padx=(6, 2))
         ctk.CTkButton(controls, text=self._t("check_updates"), width=78, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._on_check_updates).pack(side="left", padx=2)
         ctk.CTkButton(controls, text="导入 SRT", width=78, height=30, command=self._on_import_srt).pack(side="left", padx=2)
+        ctk.CTkButton(controls, text="导入视频项目", width=100, height=30, command=self._on_import_video_project).pack(side="left", padx=2)
         theme_text = self._t("theme_dark") if self._theme == "dark" else self._t("theme_light")
         ctk.CTkButton(controls, text=theme_text, width=52, height=30, font=self._font(size=12), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._switch_theme).pack(side="left", padx=2)
         ctk.CTkButton(controls, text=self._t("language"), width=40, height=30, font=self._font(size=12, weight="bold"), fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), text_color=self._c("text"), command=self._switch_language).pack(side="left", padx=(2, 0))
@@ -2283,6 +2286,30 @@ class App(ctk.CTk):
             self.log(f"[任务] 失败：{result.get('error', '未知错误')}")
             self._show_generation_failure(result)
 
+    def _apply_project_narration(self, project):
+        cfg=project.narration
+        if not cfg:return
+        voice=cfg.get("voice")
+        if voice:
+            self._selected_voice_code=voice
+            self._selected_lang=voice.split("-")[0].lower()
+            self._selected_gender=self._voice_map.get(voice,{}).get("Gender",GENDER_ALL)
+            self._refresh_voice_selectors(preferred=voice)
+        for key in ("rate","volume","pitch"):
+            if key in cfg:
+                value=float(str(cfg[key]).replace("%","").replace("Hz",""))
+                getattr(self,"_"+key+"_var").set(value)
+
+    def _on_import_video_project(self):
+        if self._busy or (self._video_workspace is not None and self._video_workspace.running):
+            messagebox.showwarning(APP_NAME, "请先完成或取消当前任务。")
+            return
+        self._show_studio("images")
+        try:
+            self._video_workspace.import_video_project()
+        except Exception as exc:
+            self._video_workspace.error(exc)
+
     def _on_import_srt(self):
         from copy import deepcopy
         from srt_parser import read_srt, spoken_text, duration_warning
@@ -2316,6 +2343,16 @@ class App(ctk.CTk):
         from project_manager import capture_tts_audio
         try:
             capture_tts_audio(self.project, path, timeline, SETTINGS_DIR / 'video-media')
+            if self.project.mode == "scenes":
+                from scene_project import map_existing_cues, write_resolved_plan
+                try:
+                    map_existing_cues(self.project,self.project.cues,self.project.audio_duration)
+                    self.project.timing_conflict=""
+                    self.project.scene_audio={}
+                    write_resolved_plan(self.project)
+                except ValueError as exc:
+                    self.project.timing_conflict=str(exc)
+                    self.log("[场景映射] 请使用生成场景配音："+str(exc))
             self.log('[视频工程] 已保留独立配音、真实时间轴和 SRT。')
         except Exception as exc:
             self.log(f'[视频工程] 保存配音失败：{exc}')
@@ -5790,6 +5827,11 @@ class App(ctk.CTk):
             self._video_workspace.cancel.set()
             self.after(150, self._on_close)
             return
+        if self._video_workspace is not None:
+            try:
+                self._video_workspace.collect()
+            except ValueError:
+                pass
         self._persist_ui_settings()
         self._cancel_event.set()
         self._stop_playback()

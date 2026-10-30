@@ -18,6 +18,17 @@ class ImageClip:
     sentence_end: int = 0
     locked: bool = False  # Locks this clip's end boundary.
     import_order: int = 0
+    scene_id: str = ""
+    narration: str = ""
+    script_line: int = 0
+    motion: str = ""
+    requested_start: float | None = None
+    requested_end: float | None = None
+    timing_source: str = "auto"
+    timing_origins: dict = field(default_factory=dict)
+    skipped: bool = False
+    status: str = "pending"
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -35,6 +46,16 @@ class Project:
     bgm: str = ""
     output_dir: str = ""
     manual_order: bool = False
+    narration: dict = field(default_factory=dict)
+    mode: str = "legacy"
+    project_dir: str = ""
+    script_file: str = ""
+    plan_file: str = ""
+    plan_metadata: dict = field(default_factory=dict)
+    scene_audio: dict = field(default_factory=dict)
+    timing_warnings: list = field(default_factory=list)
+    timing_conflict: str = ""
+    rendered_pause: float | None = None
     video: dict = field(
         default_factory=lambda: dict(
             width=1080,
@@ -72,7 +93,9 @@ class Project:
         )
     )
     planning: dict = field(
-        default_factory=lambda: dict(desired=8.0, minimum=1.0, maximum=30.0, target=0.0)
+        default_factory=lambda: dict(
+            desired=8.0, minimum=1.0, maximum=30.0, target=0.0, paragraph_pause=0.15
+        )
     )
 
     def missing_media(self):
@@ -82,7 +105,7 @@ class Project:
             self.external_video,
             self.bgm,
             self.style.get("font_file", ""),
-            *(i.path for i in self.images),
+            *(i.path for i in self.images if not i.skipped),
         ]
         return [p for p in dict.fromkeys(paths) if p and not Path(p).is_file()]
 
@@ -106,11 +129,17 @@ def save_project(project, filename):
         "external_video",
         "bgm",
         "output_dir",
+        "project_dir",
+        "script_file",
+        "plan_file",
     ):
         data[key] = relative(data[key])
     data["style"]["font_file"] = relative(data["style"].get("font_file", ""))
     for image in data["images"]:
         image["path"] = relative(image["path"])
+    for record in data["scene_audio"].values():
+        if record.get("wav"):
+            record["wav"] = relative(record["wav"])
     data["version"] = 1
     dest.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
@@ -127,9 +156,20 @@ def load_project(filename):
     data = json.loads(source.read_text(encoding="utf-8-sig"))
     if data.pop("version", None) != 1:
         raise ValueError("不支持的工程版本")
-    base = Project()
-    for key in ("video", "style", "sound", "planning"):
+    base = new_project()
+    for key in ("video", "style", "sound", "planning", "narration"):
         data[key] = {**getattr(base, key), **data.get(key, {})}
+
+    for tool in ("ffmpeg", "ffprobe"):
+        requested = data["video"].get(tool, "")
+        fallback = base.video.get(tool, "")
+        if (
+            requested
+            and not Path(requested).is_file()
+            and fallback
+            and Path(fallback).is_file()
+        ):
+            data["video"][tool] = fallback
 
     def absolute(path):
         return str((source.parent / path).resolve()) if path else ""
@@ -141,9 +181,15 @@ def load_project(filename):
         "external_video",
         "bgm",
         "output_dir",
+        "project_dir",
+        "script_file",
+        "plan_file",
     ):
-        data[key] = absolute(data.get(key, ""))
+        data[key] = absolute(data[key]) if key in data else getattr(base, key)
     data["style"]["font_file"] = absolute(data["style"].get("font_file", ""))
+    for record in data.get("scene_audio", {}).values():
+        if record.get("wav"):
+            record["wav"] = absolute(record["wav"])
     data["images"] = [
         ImageClip(**{**item, "path": absolute(item["path"])})
         for item in data.get("images", [])
@@ -174,3 +220,17 @@ def capture_tts_audio(project, path, timeline, directory):
     else:
         project.cues = []  # Never attach stale imported timing to fresh narration.
     project.audio_duration = duration
+
+
+def new_project(store=None):
+    from global_settings import GlobalSettings
+
+    project = Project()
+    defaults = (store or GlobalSettings()).read()
+    for group in ("video", "style", "sound", "planning", "narration"):
+        values = dict(defaults.get(group, {}))
+        if group == "style":
+            values.pop("subtitle_source", None)
+        getattr(project, group).update(values)
+    project.output_dir = defaults.get("output_dir", "")
+    return project

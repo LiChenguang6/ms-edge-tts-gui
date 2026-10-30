@@ -10,6 +10,14 @@ class PlanningError(ValueError):
 
 
 def plan_timeline(project):
+    if project.mode == "scenes":
+        if project.timing_conflict:
+            raise PlanningError(project.timing_conflict)
+        if not project.audio or any(c.end <= c.start for c in project.images):
+            raise PlanningError(
+                "场景模式需要先生成逐段配音或复用可精确映射的音频与 SRT；不按图片平均分配"
+            )
+        return project.images
     clips = project.images
     if (
         not clips
@@ -57,7 +65,7 @@ def plan_timeline(project):
     points = sorted(set(points))
     if len(points) < count + 1:
         raise PlanningError(
-            "完整句末切换点不足：请减少图片，或手动划分并锁定特殊边界；不会自动截断句子"
+            f"旧自动分配模式：{count} 张图片只有 {len(points)-2} 个内部句末切换点。请改用导入视频项目（每场景一段解说），或减少图片；不会自动截断句子"
         )
     states = {0: (0.0, [])}
     for rank in range(1, count + 1):
