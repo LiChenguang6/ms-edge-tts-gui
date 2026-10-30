@@ -130,7 +130,29 @@ def export_video(
             fd, staging = tempfile.mkstemp(dir=output.parent, suffix=".mp4")
             os.close(fd)
             try:
-                shutil.copyfile(video, staging)
+                if project.external_video:
+                    run_ffmpeg(
+                        [
+                            "-i",
+                            video,
+                            "-map",
+                            "0:v:0",
+                            "-an",
+                            "-c:v",
+                            "copy",
+                            "-movflags",
+                            "+faststart",
+                            staging,
+                        ],
+                        cancel,
+                        progress,
+                        duration,
+                        settings.get("ffmpeg", ""),
+                    )
+                else:
+                    shutil.copyfile(video, staging)
+                if cancel and cancel.is_set():
+                    raise ExportCancelled("导出已取消")
                 os.replace(staging, output)
             finally:
                 Path(staging).unlink(missing_ok=True)

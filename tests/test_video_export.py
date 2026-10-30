@@ -127,6 +127,11 @@ class ExportTests(unittest.TestCase):
             probe(self.root / "composed.mp4")["duration"], 2, delta=0.08
         )
 
+        self.p.external_video = str(self.root / "composed.mp4")
+        muted = self.root / "muted.mp4"
+        export_video(self.p, muted, silent=True)
+        self.assertEqual([s["codec_type"] for s in probe(muted)["streams"]], ["video"])
+
     def test_cancellation_preserves_output(self):
         output = self.root / "existing.mp4"
         output.write_bytes(b"keep")
