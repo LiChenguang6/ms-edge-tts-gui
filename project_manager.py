@@ -90,3 +90,24 @@ def load_project(filename):
     data['style']['font_file'] = absolute(data['style'].get('font_file', ''))
     data['images'] = [ImageClip(**{**item, 'path': absolute(item['path'])}) for item in data.get('images', [])]
     return Project(**data)
+
+
+def capture_tts_audio(project, path, timeline, directory):
+    """Persistent copies, independent from the legacy transient audio preview."""
+    import shutil
+    import uuid
+    from tts_engine import timeline_to_srt
+    from media_tools import probe
+    root = Path(directory) / uuid.uuid4().hex
+    root.mkdir(parents=True, exist_ok=True)
+    audio = root/'voice.mp3'
+    shutil.copy2(path, audio)
+    project.audio = str(audio.resolve())
+    project.timeline = timeline or {}
+    if timeline:
+        project.cues = [dict(c) for c in timeline.get('sentences', [])]
+        (root/'voice.timeline.json').write_text(json.dumps(timeline,ensure_ascii=False,indent=2),encoding='utf-8')
+        (root/'voice.srt').write_text(timeline_to_srt(timeline),encoding='utf-8-sig')
+    else:
+        project.cues = []  # Never attach stale imported timing to fresh narration.
+    project.audio_duration = probe(audio, project.video.get('ffprobe',''))['duration']

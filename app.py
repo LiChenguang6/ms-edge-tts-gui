@@ -2242,6 +2242,7 @@ class App(ctk.CTk):
             self._generated_path = path
             self._generated_text = generated_text
             self._generated_timeline = result.get("timeline")
+            self._capture_video_audio(path, self._generated_timeline)
             if self._pages:
                 page = self._pages[self._page_index]
                 self._generated_pages[self._page_index + 1] = {
@@ -2267,6 +2268,14 @@ class App(ctk.CTk):
             self._status_label.configure(text=self._t("failed"), text_color="#f7768e")
             self.log(f"[任务] 失败：{result.get('error', '未知错误')}")
             self._show_generation_failure(result)
+
+    def _capture_video_audio(self, path, timeline):
+        from project_manager import capture_tts_audio
+        try:
+            capture_tts_audio(self.project, path, timeline, SETTINGS_DIR / 'video-media')
+            self.log('[视频工程] 已保留独立配音、真实时间轴和 SRT。')
+        except Exception as exc:
+            self.log(f'[视频工程] 保存配音失败：{exc}')
 
     def _show_generation_failure(self, result: dict) -> None:
         message = result.get("error", "未知错误")
