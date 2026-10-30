@@ -46,7 +46,6 @@ from tts_engine import (
     StallController,
     TTSConfig,
     TTSEngine,
-    UserCanceled,
     detect_proxy,
     insert_sentence_pause_directives,
     list_tts_voices,
@@ -55,7 +54,7 @@ from tts_engine import (
     validate_pause_ms,
 )
 from text_utils import clean_text, default_filename, normalize_for_tts
-from srt_dubbing import dub_srt, read_srt
+from srt_dubbing import dub_srt, parse_srt, read_srt_text
 from update_checker import ReleaseInfo, UpdateCheckResult, check_for_updates
 from voice_groups import (
     GENDER_ALL,
@@ -172,6 +171,7 @@ class FileBatchItem:
     timeline: dict | None = None
     error: str = ""
     result_name: str = ""
+    is_srt: bool = False
 
 
 class App(ctk.CTk):
@@ -299,7 +299,6 @@ class App(ctk.CTk):
         self._btn_sentence_pause = None
         self._btn_dub_pages = None
         self._btn_result_preview = None
-        self._btn_srt_dub = None
         self._mode_settings_title = None
         self._mode_settings_hint = None
         self._pause_label = None
@@ -337,7 +336,6 @@ class App(ctk.CTk):
 
     TRANSLATIONS = {
         "app": {"zh": "Edge TTS 语音合成助手", "en": "Edge TTS Voice Studio"},
-        "srt_dub": {"zh": "从 SRT 按时间轴配音", "en": "Dub from SRT timestamps"},
         "open": {"zh": "开源 · GPL-3.0-or-later", "en": "Open Source · GPL-3.0-or-later"},
         "open_badge": {"zh": "免费 · 开源", "en": "Free · Open Source"},
         "github_repo": {"zh": "GitHub 仓库", "en": "GitHub"},
@@ -1445,14 +1443,6 @@ class App(ctk.CTk):
         self._btn_save.grid(row=2, column=1, sticky="ew", padx=(4, 0))
         self._btn_result_preview = ctk.CTkButton(actions, text=self._t("result_preview"), command=self._open_result_preview, height=30, font=self._font(size=12, weight="bold"), fg_color="transparent", hover_color=self._c("card_raised"), border_width=1, border_color=self._c("border"), text_color=self._c("accent"))
         self._btn_result_preview.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        self._btn_srt_dub = ctk.CTkButton(
-            actions, text=self._t("srt_dub"), command=self._on_srt_dub,
-            height=30, font=self._font(size=12, weight="bold"),
-            fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"),
-            border_width=1, border_color=self._c("border"),
-            text_color=self._c("accent"),
-        )
-        self._btn_srt_dub.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self._configure_highlight_tag()
         self._sync_generated_status()
         self._update_generated_buttons()
@@ -1618,16 +1608,6 @@ class App(ctk.CTk):
             self._on_task_done(item[1], item[2])
         elif kind == "batch_done":
             self._on_batch_done(item[1])
-        elif kind == "srt_progress":
-            done, total, rate = item[1:]
-            self._progress.set(done / total)
-            self._status_label.configure(text=(
-                f"SRT dubbing {done}/{total} · rate {rate:+d}%"
-                if self._language == "en"
-                else f"SRT 配音 {done}/{total} 条 · 当前语速 {rate:+d}%"
-            ))
-        elif kind == "srt_done":
-            self._on_srt_done(item[1])
         elif kind == "result_row_done":
             self._on_result_row_done(item[1], item[2])
         elif kind == "stall_clear":
@@ -2047,7 +2027,10 @@ class App(ctk.CTk):
         if self._file_batch_active and self._workflow_mode == "normal":
             self._textbox.grid_remove()
             self._batch_frame.grid()
-            self._helper_label.configure(text=self._t("helper_normal_batch"))
+            hint = self._t("helper_normal_batch")
+            if any(item.is_srt for item in self._file_items):
+                hint += ("\nSRT 按原字幕时间轴配音；试听使用临时缓存，确认保存才导出。" if self._language == "zh" else "\nSRT uses source timestamps; preview remains in temporary cache until saved.")
+            self._helper_label.configure(text=hint)
         else:
             self._batch_frame.grid_remove()
             self._textbox.grid()
@@ -2179,104 +2162,6 @@ class App(ctk.CTk):
             line_pause_enabled=self._line_pause_enabled and self._workflow_mode == "line",
             line_pause_ms=self._line_pause_ms if self._line_pause_enabled and self._workflow_mode == "line" else 0,
         )
-
-    def _on_srt_dub(self):
-        """Import SRT and compose one MP3 on its original subtitle timeline."""
-        if self._busy:
-            messagebox.showinfo(APP_NAME, "已有任务进行中，请先停止当前任务。")
-            return
-        source = filedialog.askopenfilename(
-            parent=self,
-            title="选择 SRT 字幕 / Choose SRT subtitles",
-            filetypes=[("SubRip subtitles", "*.srt"), ("All files", "*.*")],
-        )
-        if not source:
-            return
-        try:
-            cues = read_srt(source)
-        except (OSError, ValueError) as exc:
-            messagebox.showerror(APP_NAME, f"SRT 导入失败：{exc}")
-            return
-        destination = filedialog.asksaveasfilename(
-            parent=self,
-            title="导出按时间轴对齐的 MP3 / Save aligned MP3",
-            defaultextension=".mp3",
-            initialfile=Path(source).stem + "_dubbed.mp3",
-            filetypes=[("MP3 audio", "*.mp3")],
-        )
-        if not destination:
-            return
-        if Path(destination).resolve() == Path(source).resolve():
-            messagebox.showerror(APP_NAME, "目标文件不能覆盖原始 SRT 字幕。")
-            return
-        cfg = self._build_cfg()
-        self._busy = True
-        self._cancel_event = threading.Event()
-        self._set_busy_ui(True)
-        self._progress.configure(mode="determinate")
-        self._progress.set(0)
-        self._status_label.configure(
-            text=(f"SRT dubbing: {len(cues)} cues…" if self._language == "en"
-                  else f"正在按 SRT 时间轴配音：共 {len(cues)} 条…"),
-            text_color=self._c("accent"),
-        )
-        threading.Thread(
-            target=self._worker_srt_dub,
-            args=(cues, destination, cfg, self._cancel_event),
-            daemon=True,
-        ).start()
-
-    def _worker_srt_dub(self, cues, destination, cfg, cancel_event):
-        try:
-            result = dub_srt(
-                cues, destination, cfg,
-                cancel_event=cancel_event,
-                on_progress=lambda done, total, rate: self._ui_q.put(
-                    ("srt_progress", done, total, rate)
-                ),
-                on_log=lambda message: self._ui_q.put(("log", message)),
-            )
-        except UserCanceled:
-            result = {"status": "canceled"}
-        except Exception as exc:  # noqa: BLE001
-            result = {"status": "error", "error": str(exc)}
-        self._ui_q.put(("srt_done", result))
-
-    def _on_srt_done(self, result):
-        self._busy = False
-        self._set_busy_ui(False)
-        status = result.get("status")
-        if status == "done":
-            self._progress.set(1)
-            self._status_label.configure(
-                text=("SRT dubbing complete" if self._language == "en"
-                      else "SRT 配音完成"), text_color=self._c("success")
-            )
-            changes = result.get("speed_changes") or []
-            note = (
-                f"\n有 {len(changes)} 条字幕自动加快了语速。"
-                if changes else ""
-            )
-            messagebox.showinfo(
-                APP_NAME,
-                f"已生成对齐时间轴的 MP3：\n{result['path']}\n"
-                f"字幕总长 {result['duration_seconds']:.2f} 秒，"
-                f"共 {result['cues']} 条。{note}\n"
-                "原始 SRT 文件没有被修改。"
-            )
-            self.log(f"[SRT 配音] 已保存：{result['path']}")
-            self._maybe_open_folder(result["path"])
-        elif status == "canceled":
-            self._status_label.configure(
-                text=("SRT dubbing canceled" if self._language == "en"
-                      else "SRT 配音已取消"), text_color=self._c("warning")
-            )
-        else:
-            self._status_label.configure(
-                text=("SRT dubbing failed" if self._language == "en"
-                      else "SRT 配音失败"), text_color=self._c("danger")
-            )
-            messagebox.showerror(APP_NAME, f"SRT 配音失败：\n{result.get('error', '未知错误')}")
 
     def _start_task(self, text, output_path, mode):
         if self._busy:
@@ -2554,7 +2439,7 @@ class App(ctk.CTk):
                 else "导入文档，逐页旁白配音"
             ),
             filetypes=[
-                ("Documents (txt / md / docx / pdf)" if is_english else "文档（txt / md / docx / pdf）", "*.txt *.md *.markdown *.docx *.pdf"),
+                ("Documents (txt / md / docx / pdf / srt)" if is_english else "文档（txt / md / docx / pdf / srt）", "*.txt *.md *.markdown *.docx *.pdf *.srt"),
                 ("All files" if is_english else "所有文件", "*.*"),
             ],
         )
@@ -2720,10 +2605,10 @@ class App(ctk.CTk):
                 title=self._t("batch_import_title"),
                 filetypes=[
                     (
-                        "Documents (txt / md / docx / pdf)"
+                        "Documents (txt / md / docx / pdf / srt)"
                         if self._language == "en"
-                        else "文档（txt / md / docx / pdf）",
-                        "*.txt *.md *.markdown *.docx *.pdf",
+                        else "文档（txt / md / docx / pdf / srt）",
+                        "*.txt *.md *.markdown *.docx *.pdf *.srt",
                     ),
                     ("All files" if self._language == "en" else "所有文件", "*.*"),
                 ],
@@ -2801,24 +2686,31 @@ class App(ctk.CTk):
                 skipped += 1
                 continue
             ext = os.path.splitext(path)[1].lower()
-            if ext not in (".txt", ".md", ".markdown", ".docx", ".pdf"):
+            if ext not in (".txt", ".md", ".markdown", ".docx", ".pdf", ".srt"):
                 skipped += 1
                 self.log(self._t("batch_import_unsupported", name=os.path.basename(path)))
                 continue
             if any(os.path.normcase(item.source_path) == os.path.normcase(path) for item in self._file_items):
                 continue
             try:
-                raw_text = read_document_text(path)
-                parsed = parse_tts_header(raw_text)
+                if ext == ".srt":
+                    raw_text = read_srt_text(path)
+                    srt_cues = parse_srt(raw_text)
+                    preview_text = " ".join(cue.text for cue in srt_cues)
+                    parsed = None
+                else:
+                    raw_text = read_document_text(path)
+                    parsed = parse_tts_header(raw_text)
+                    preview_text = normalize_for_tts(clean_text(parsed.text))
             except Exception as exc:  # noqa: BLE001
                 skipped += 1
                 self.log(f"[批量] 导入失败：{os.path.basename(path)}：{exc}")
                 continue
             cfg = self._default_file_batch_cfg()
             timeline_enabled = bool(self._timeline_enabled)
-            srt_enabled = bool(self._srt_enabled)
+            srt_enabled = bool(self._srt_enabled) or ext == ".srt"
             srt_fill_line_pause = False
-            if parsed.options:
+            if parsed is not None and parsed.options:
                 cfg, timeline_enabled, srt_enabled, srt_fill_line_pause = self._apply_batch_header_options(
                     parsed.options,
                     cfg,
@@ -2826,21 +2718,22 @@ class App(ctk.CTk):
                     srt_enabled,
                     srt_fill_line_pause,
                 )
-            for warning in parsed.warnings:
+            for warning in (parsed.warnings if parsed is not None else ()):
                 self.log(f"[批量] {os.path.basename(path)}：{warning}")
             item = FileBatchItem(
                 index=len(self._file_items),
                 source_path=os.path.abspath(path),
                 display_name=os.path.basename(path),
                 raw_text=raw_text,
-                text=normalize_for_tts(clean_text(parsed.text)),
-                header_line=parsed.raw_header,
-                header_options=dict(parsed.options),
+                text=preview_text,
+                header_line=parsed.raw_header if parsed is not None else "",
+                header_options=dict(parsed.options) if parsed is not None else {},
                 cfg=cfg,
                 timeline_enabled=timeline_enabled,
                 srt_enabled=srt_enabled,
                 srt_fill_line_pause=srt_fill_line_pause,
                 result_name=sanitize_filename_stem(Path(path).stem),
+                is_srt=(ext == ".srt"),
             )
             self._file_items.append(item)
             imported += 1
@@ -3011,6 +2904,12 @@ class App(ctk.CTk):
             self._invalidate_generated()
 
     def _mark_file_item_dirty(self, item: FileBatchItem):
+        self._stop_playback()
+        if item.output_path and os.path.isfile(item.output_path):
+            try:
+                os.unlink(item.output_path)
+            except OSError:
+                pass
         item.status = "pending"
         item.progress = 0.0
         item.output_path = ""
@@ -3198,6 +3097,19 @@ class App(ctk.CTk):
 
         def save():
             raw_text = editor.get("1.0", "end-1c")
+            if item.is_srt:
+                try:
+                    cues = parse_srt(raw_text)
+                except ValueError as exc:
+                    messagebox.showerror(APP_NAME, f"SRT 时间轴错误：{exc}", parent=dialog)
+                    return
+                item.raw_text = raw_text
+                item.text = " ".join(cue.text for cue in cues)
+                self._mark_file_item_dirty(item)
+                self._refresh_file_batch_tree()
+                self._load_file_item_into_controls(item.index)
+                dialog.destroy()
+                return
             parsed = parse_tts_header(raw_text)
             cfg, timeline_enabled, srt_enabled, srt_fill_line_pause = self._apply_batch_header_options(
                 parsed.options,
@@ -3600,6 +3512,8 @@ class App(ctk.CTk):
                     item.output_path,
                     item.display_name,
                     item.result_name,
+                    item.is_srt,
+                    item.raw_text if item.is_srt else "",
                 )
             )
         self._refresh_file_batch_tree()
@@ -3644,7 +3558,7 @@ class App(ctk.CTk):
             if self._cancel_event.is_set():
                 canceled = True
                 return False
-            index, text, cfg, timeline_enabled, srt_enabled, srt_fill, output, display_name, result_name = job
+            index, text, cfg, timeline_enabled, srt_enabled, srt_fill, output, display_name, result_name, is_srt, raw_srt = job
             self._ui_q.put(("batch_item_update", index, "generating", 0.0, ""))
             if not str(text or "").strip():
                 message = "文件中没有可朗读的文字"
@@ -3657,23 +3571,37 @@ class App(ctk.CTk):
                     "display_name": display_name,
                 })
                 return True
-            controller = self._make_controller()
-            engine = TTSEngine(
-                on_log=lambda message: self._ui_q.put(("log", f"[{display_name}] {message}")),
-                on_progress=lambda percent, written, pos=pos: self._ui_q.put(
-                    (
-                        "file_progress",
-                        index,
-                        percent,
-                        (pos - 1 + percent / 100.0) / total * 100,
-                        written,
-                    )
-                ),
-                controller=controller,
-                cancel_event=self._cancel_event,
-            )
+            engine = None
             try:
-                result = engine.generate(text, output, cfg)
+                if is_srt:
+                    result = dub_srt(
+                        parse_srt(raw_srt), output, cfg,
+                        cancel_event=self._cancel_event,
+                        on_log=lambda message: self._ui_q.put(
+                            ("log", f"[{display_name}] {message}")
+                        ),
+                        on_progress=lambda done, count, rate, pos=pos: self._ui_q.put(
+                            ("file_progress", index, done / count * 100,
+                             (pos - 1 + done / count) / total * 100, 0)
+                        ),
+                    )
+                else:
+                    controller = self._make_controller()
+                    engine = TTSEngine(
+                        on_log=lambda message: self._ui_q.put(("log", f"[{display_name}] {message}")),
+                        on_progress=lambda percent, written, pos=pos: self._ui_q.put(
+                            (
+                                "file_progress",
+                                index,
+                                percent,
+                                (pos - 1 + percent / 100.0) / total * 100,
+                                written,
+                            )
+                        ),
+                        controller=controller,
+                        cancel_event=self._cancel_event,
+                    )
+                    result = engine.generate(text, output, cfg)
             except Exception as exc:  # noqa: BLE001
                 result = {"status": "error", "error": str(exc)}
             if self._cancel_event.is_set():
@@ -3699,7 +3627,7 @@ class App(ctk.CTk):
                 "index": index,
                 "status": "done",
                 "audio": output,
-                "timeline": getattr(engine, "timeline", None),
+                "timeline": result.get("timeline") if is_srt else getattr(engine, "timeline", None),
                 "text": text,
                 "timeline_enabled": timeline_enabled,
                 "srt_enabled": srt_enabled,
@@ -3859,6 +3787,7 @@ class App(ctk.CTk):
                     "sentence_pause_marks": list(item.cfg.sentence_pause_marks),
                     "timeline_enabled": item.timeline_enabled,
                     "srt_enabled": item.srt_enabled,
+                    "source_type": "srt" if item.is_srt else "document",
                     "text": item.text,
                 }
                 if item.timeline_enabled and item.timeline:
@@ -3869,7 +3798,8 @@ class App(ctk.CTk):
                     )
                     item_payload["timeline"] = timeline_name
                 if item.srt_enabled and item.timeline:
-                    srt = timeline_to_srt(
+                    # Preserve input SRT timestamps when exporting.
+                    srt = item.raw_text if item.is_srt else timeline_to_srt(
                         item.timeline,
                         fill_gaps=item.srt_fill_line_pause,
                     )
@@ -4327,6 +4257,14 @@ class App(ctk.CTk):
                 if not (0 <= file_index < len(self._file_items)):
                     return
                 item = self._file_items[file_index]
+                if item.is_srt:
+                    stop_playback()
+                    dialog.destroy()
+                    self._selected_file_index = file_index
+                    self._refresh_file_batch_tree()
+                    self._load_file_item_into_controls(file_index)
+                    self._on_batch_edit_selected()
+                    return
                 item.text = normalize_for_tts(clean_text(text))
                 entry["text"] = item.text
                 if self._busy:
@@ -4399,6 +4337,9 @@ class App(ctk.CTk):
                 editor = ctk.CTkTextbox(frame, height=72, wrap="word", fg_color=self._c("field"), border_width=1, border_color=self._c("border"), text_color=self._c("text"), font=self._font(size=12))
                 editor.grid(row=0, column=1, sticky="ew", padx=6, pady=8)
                 editor.insert("1.0", entry.get("text", ""))
+                is_srt_entry = bool(self._file_batch_active and 0 <= int(entry.get("file_index", -1)) < len(self._file_items) and self._file_items[int(entry["file_index"])].is_srt)
+                if is_srt_entry:
+                    editor.configure(state="disabled")
                 ctk.CTkLabel(frame, text=timeline_text(entry), justify="left", anchor="nw", wraplength=360, text_color=self._c("muted"), font=self._font(size=11)).grid(row=0, column=2, sticky="new", padx=8, pady=10)
                 actions = ctk.CTkFrame(frame, fg_color="transparent"); actions.grid(row=0, column=3, sticky="nsew", padx=8, pady=8)
                 duration = entry_duration(entry)
@@ -4412,7 +4353,7 @@ class App(ctk.CTk):
                 play_button = ctk.CTkButton(buttons, text=self._t("result_play"), width=72, height=28, fg_color=self._c("primary"), hover_color=self._c("primary_hover"), text_color="#FFFFFF", command=lambda e=entry, s=state: play_row(e, s))
                 play_button.pack(side="left", padx=(0, 5))
                 state["button"] = play_button
-                ctk.CTkButton(buttons, text=self._t("result_regenerate"), width=88, height=28, fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), border_width=1, border_color=self._c("accent"), text_color=self._c("accent"), command=lambda e=entry, s=state: regenerate(e, s)).pack(side="left")
+                ctk.CTkButton(buttons, text=("编辑 SRT" if is_srt_entry and self._language == "zh" else "Edit SRT" if is_srt_entry else self._t("result_regenerate")), width=88, height=28, fg_color=self._c("surface_alt"), hover_color=self._c("card_raised"), border_width=1, border_color=self._c("accent"), text_color=self._c("accent"), command=lambda e=entry, s=state: regenerate(e, s)).pack(side="left")
                 for widget in (frame, editor):
                     widget.bind("<Enter>", lambda _e, f=frame: f.configure(fg_color=self._c("card_raised")))
                     widget.bind("<Leave>", lambda _e, f=frame: f.configure(fg_color=self._c("card")))
@@ -5811,8 +5752,6 @@ class App(ctk.CTk):
             self._mode_selector.configure(state="disabled" if busy else "normal")
         if self._btn_import is not None:
             self._btn_import.configure(state="disabled" if busy else "normal")
-        if self._btn_srt_dub is not None:
-            self._btn_srt_dub.configure(state="disabled" if busy else "normal")
         if self._btn_download_example is not None:
             self._btn_download_example.configure(state="disabled" if busy else "normal")
         if self._btn_sentence_pause is not None:
