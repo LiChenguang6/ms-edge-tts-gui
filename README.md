@@ -73,6 +73,9 @@
 
 ## 中文说明
 
+> **Fork 测试功能：SRT → 对齐时间轴的 MP3 配音。** 主界面右侧新增“从 SRT 按时间轴配音”按钮，导入原 SRT 后会按每条时间戳合成，空白处自动插入静音，超时自动尝试加速（最高 +100%），无法容纳的句子会报错而不是截断。使用说明见 [SRT 时间轴配音](docs/SRT_DUBBING.md)。这与现有的“生成 SRT 字幕”属于相反的流程。
+
+
 **Edge TTS 语音合成助手**是一款免费、开源的 Windows 桌面软件（GPL-3.0-or-later，开发者 WangYufan）。它把文章、脚本和字幕文稿合成为自然的 MP3 音频，不需要 API Key。软件提供**普通、逐页、逐行**三种工作模式，并支持独立句间停顿、行末真实静音、SRT 字幕、时间轴 JSON、逐句试听高亮、可拖动播放进度和批量 ZIP 导出。界面可随时切换中文和 English，适合旁白制作、视频剪辑、跟读学习和批量配音。
 
 ### v1.7.2 更新亮点
@@ -258,6 +261,9 @@ lines_archive.zip
 ---
 
 ## English Guide
+
+> **Experimental fork feature:** SRT-to-MP3 dubbing follows the original subtitle timestamps, inserts silence into gaps and cautiously speeds up overlong lines. No speech is truncated. See [SRT dubbing guide](docs/SRT_DUBBING.md).
+
 
 
 **Edge TTS Voice Studio** is a modern Windows desktop application for turning articles, notes, scripts, documentation, and other text into high-quality MP3 audio. It is powered by the open-source [`edge-tts`](https://github.com/rany2/edge-tts) library and Microsoft Edge online voices—**no API key is required**. It is **free and open source under the GPL-3.0-or-later license**, developed by **WangYufan**.
