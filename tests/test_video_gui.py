@@ -103,7 +103,7 @@ class WorkspaceTests(unittest.TestCase):
         save_project(window.project, filename)
         restored = load_project(filename)
         self.assertFalse(restored.style["burn"])
-        self.assertEqual(restored.subtitle_srt, str(srt))
+        self.assertTrue(Path(restored.subtitle_srt).samefile(srt))
         # Reopening a project must not inherit the previous workspace's checkbox.
         workspace.subtitle_enabled.set(True)
         with patch(
