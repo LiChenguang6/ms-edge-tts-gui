@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Temporary one-shot publisher: upload the already-tested EXE to a Fork prerelease.
+name: Publish SRT Test EXE to Fork Releases
+
+on:
+  push:
+    branches:
+      - "feature/srt-timed-dubbing"
+    paths:
+      - ".github/workflows/publish-srt-preview.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download previously tested Windows EXE
+        uses: actions/download-artifact@v4
+        with:
+          name: EdgeTTSGui-SRT-Test-Windows
+          path: release-files
+          run-id: 41030718352
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify expected EXE and calculate SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release-files/EdgeTTSGui-SRT-Test.exe
+          sha256sum release-files/EdgeTTSGui-SRT-Test.exe | tee release-files/SHA256SUMS.txt
+          ls -lh release-files/
+
+      - name: Write bilingual release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## SRT 时间轴配音测试版 / SRT Timed Dubbing Preview
+
+          这是 LiChenguang6 Fork 的非官方预发布测试版，基于原项目 v1.7.2。不是原作者发布的正式版本。
+
+          - 普通模式的“批量上传”支持 SRT 与 TXT/MD/DOCX/PDF 混合导入。
+          - 按 SRT 时间戳逐句合成语音，自动填充静音；台词超出时长时尝试调整语速。
+          - 复用原有的试听、临时缓存、退出时清理、结果预览和主动保存 ZIP。
+          - SRT 编辑保留原始字幕时间戳，导出 ZIP 可包含原 SRT 和时间轴 JSON。
+          - 来源：已通过 Windows GitHub Actions 离线测试和 PyInstaller 构建，未验证实际微软语音服务所有情况。
+
+          安装使用：下载 EdgeTTSGui-SRT-Test.exe，在 Windows 上直接运行，无需安装 Python。此测试版未进行代码签名。
+
+          Source build commit: e37a32e7114820f8a46b0f4ede3183659e173ac6
+          GitHub Actions run: https://github.com/LiChenguang6/ms-edge-tts-gui/actions/runs/41030718352
+          Related upstream PR: https://github.com/JJosephph/ms-edge-tts-gui/pull/5
+
+          ---
+          Unofficial unsigned Windows preview from the fork. The SRT feature is integrated into Batch Upload, and audio remains in temporary cache until the user explicitly exports it. Please test locally before production use.
+          EOF
+
+      - name: Publish prerelease to the Fork
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: srt-timed-dubbing-preview-20261030
+          SOURCE_SHA: e37a32e7114820f8a46b0f4ede3183659e173ac6
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-files/EdgeTTSGui-SRT-Test.exe release-files/SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" \
+              release-files/EdgeTTSGui-SRT-Test.exe release-files/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" \
+              --title "SRT Timed Dubbing Preview (2026-10-30)" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
