@@ -2206,6 +2206,9 @@ class App(ctk.CTk):
         )
         if not destination:
             return
+        if Path(destination).resolve() == Path(source).resolve():
+            messagebox.showerror(APP_NAME, "目标文件不能覆盖原始 SRT 字幕。")
+            return
         cfg = self._build_cfg()
         self._busy = True
         self._cancel_event = threading.Event()
