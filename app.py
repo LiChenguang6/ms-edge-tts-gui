@@ -99,7 +99,7 @@ def saved_int(settings: dict, key: str, default: int) -> int:
         return int(settings.get(key, default))
     except (TypeError, ValueError):
         return default
-UI_FONT_FALLBACKS = ("Microsoft YaHei", "SimHei", "Arial")
+UI_FONT_FALLBACKS = ("Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Noto Serif CJK SC", "Arial")
 SETTINGS_DIR = Path(os.environ.get("APPDATA", Path.home())) / "EdgeTTSGui"
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 PREVIEW_FILENAME = "edge_tts_preview.mp3"
@@ -969,8 +969,10 @@ class App(ctk.CTk):
             self._video_workspace.destroy()
             self._video_workspace = None
         if mode == 'audio':
+            self._activity_frame.grid()
             self._audio_workspace.grid()
         else:
+            self._activity_frame.grid_remove()
             self._video_workspace = VideoWorkspace(self, mode)
 
     def _badge(self, master, text, color):
@@ -1509,6 +1511,7 @@ class App(ctk.CTk):
 
     def _build_log(self):
         log_frame = ctk.CTkFrame(self, corner_radius=18, fg_color=self._c("surface"), border_width=1, border_color=self._c("border"))
+        self._activity_frame = log_frame
         log_frame.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 8))
         log_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(log_frame, text=self._t("log"), text_color=self._c("text"), font=self._font(size=13, weight="bold")).grid(row=0, column=0, sticky="w", padx=16, pady=(9, 2))

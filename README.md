@@ -1,3 +1,15 @@
+# Edge TTS 视频创作助手（图片知识短视频开发分支）
+
+在原音频客户端上新增 **音频生成 → 图拼视频 → 合成导出** 工作流。
+支持 SRT、真实配音时间轴、图片句末分配、字幕/BGM 与本地 MP4 导出。
+
+- [中文使用指南、架构与打包说明](VIDEO_STUDIO_GUIDE.zh-CN.md)
+- [分阶段开发及验证记录](VIDEO_STUDIO_DEVELOPMENT.md)
+
+Windows EXE 构建待 Windows CI 验证；以下保留原项目说明和作者署名。
+
+---
+
 # Edge TTS Voice Studio / Edge TTS 语音合成助手
 
 <p align="center">

@@ -25,20 +25,33 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 ".venv\Scripts\python.exe" -m pip install -r requirements-dev.txt
+if errorlevel 1 exit /b 1
+where ffmpeg >nul 2>nul
+if errorlevel 1 echo WARNING: FFmpeg is not on PATH. Configure ffmpeg.exe in the application.
+where ffprobe >nul 2>nul
+if errorlevel 1 echo WARNING: FFprobe is not on PATH. Configure ffprobe.exe in the application.
 
 echo Running tests...
 ".venv\Scripts\python.exe" -m unittest discover -s tests -v
 if errorlevel 1 exit /b 1
 
  echo Building application directory...
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onedir --windowed --name "EdgeTTSGui" --icon "assets\app.ico" --collect-all tkinterdnd2 --hidden-import docx --hidden-import pypdf --hidden-import miniaudio --hidden-import lameenc --hidden-import cffi --hidden-import _cffi_backend app.py
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onedir --windowed --name "EdgeTTSGui" --icon "assets\app.ico" --collect-all customtkinter --collect-all tkinterdnd2 --hidden-import docx --hidden-import pypdf --hidden-import miniaudio --hidden-import lameenc --hidden-import cffi --hidden-import _cffi_backend app.py
 if errorlevel 1 exit /b 1
 if not exist "dist\EdgeTTSGui\EdgeTTSGui.exe" exit /b 1
 
  echo Building portable executable...
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --name "EdgeTTSGui-Portable" --icon "assets\app.ico" --collect-all tkinterdnd2 --hidden-import docx --hidden-import pypdf --hidden-import miniaudio --hidden-import lameenc --hidden-import cffi --hidden-import _cffi_backend app.py
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --name "EdgeTTSGui-Portable" --icon "assets\app.ico" --collect-all customtkinter --collect-all tkinterdnd2 --hidden-import docx --hidden-import pypdf --hidden-import miniaudio --hidden-import lameenc --hidden-import cffi --hidden-import _cffi_backend app.py
 if errorlevel 1 exit /b 1
 if not exist "dist\EdgeTTSGui-Portable.exe" exit /b 1
+
+echo Checking both executable layouts...
+for %%E in ("dist\EdgeTTSGui\EdgeTTSGui.exe" "dist\EdgeTTSGui-Portable.exe") do (
+    if exist "%TEMP%\EdgeTTSGui-smoke.json" del "%TEMP%\EdgeTTSGui-smoke.json"
+    start /wait "" "%%~E" --smoke-test "%TEMP%\EdgeTTSGui-smoke.json"
+    if errorlevel 1 exit /b 1
+    if not exist "%TEMP%\EdgeTTSGui-smoke.json" exit /b 1
+)
 
  echo Building installer...
 "%ISCC%" "installer\EdgeTTSGui.iss"
