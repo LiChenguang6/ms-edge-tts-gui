@@ -42,6 +42,14 @@ class DefaultsTests(unittest.TestCase):
             self.assertEqual(restored.output_dir, "C:/videos")
             self.assertEqual(restored.video["ffmpeg"], "C:/tools/ffmpeg.exe")
             self.assertFalse(list(path.parent.glob("*.tmp")))
+            from global_settings import config_dir
+
+            with patch.dict(
+                "os.environ", {"APPDATA": str(Path(root) / "AppData")}
+            ), patch(
+                "pathlib.Path.home", side_effect=RuntimeError("profile unavailable")
+            ):
+                self.assertEqual(config_dir(), Path(root) / "AppData" / "EdgeTTSGui")
 
     def test_directory_is_not_an_executable(self):
         with tempfile.TemporaryDirectory() as root:
@@ -77,7 +85,7 @@ class DefaultsTests(unittest.TestCase):
                     atomic_json(path, {"fps": 60})
             import json
 
-            self.assertEqual(json.loads(path.read_text()), {"fps": 30})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"fps": 30})
             self.assertFalse(list(Path(root).glob("*.tmp")))
 
     def test_output_permission_error_is_actionable(self):

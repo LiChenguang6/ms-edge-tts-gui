@@ -120,7 +120,7 @@ class SceneTests(unittest.TestCase):
         )
         root = fixture(self.root / "portrait", 2)
         path = root / "image_plan.json"
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         data["video"] = {"aspect_ratio": "9:16", "ffmpeg": "do-not-execute.exe"}
         atomic_json(path, data)
         project = import_scene_project(root, self.store)
@@ -133,7 +133,7 @@ class SceneTests(unittest.TestCase):
     def test_invalid_ids_and_mismatched_narration(self):
         p = self.project(2)
         path = Path(p.plan_file)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         data["scenes"][1]["id"] = "001"
         atomic_json(path, data)
         with self.assertRaisesRegex(ValueError, "编号"):
@@ -166,7 +166,9 @@ class SceneTests(unittest.TestCase):
                 )
                 self.assertTrue(all("|" not in text for text in FakeEngine.calls))
                 resolved = json.loads(
-                    (directory / "output" / "resolved_image_plan.json").read_text()
+                    (directory / "output" / "resolved_image_plan.json").read_text(
+                        encoding="utf-8"
+                    )
                 )
                 self.assertEqual(
                     resolved["scenes"][0]["prompt"], {"opaque": "不得执行的元数据"}
@@ -259,7 +261,9 @@ class SceneTests(unittest.TestCase):
         )
         self.assertEqual(len(FakeEngine.calls), previous)
         self.assertEqual(p.cues[0]["scene_id"], "003")
-        (Path(p.output_dir) / ".scene-cache" / "manifest.json").write_text("[]")
+        (Path(p.output_dir) / ".scene-cache" / "manifest.json").write_text(
+            "[]", encoding="utf-8"
+        )
         prepare_scene_audio(
             p, TTSConfig(), engine_factory=FakeEngine, request_interval=0
         )
@@ -348,4 +352,6 @@ class SceneTests(unittest.TestCase):
         self.assertIn("002", str(error.exception))
         self.assertIn("参数", str(error.exception))
         self.assertTrue(Path(error.exception.log_path).is_file())
-        self.assertIn("002.png", Path(error.exception.log_path).read_text())
+        self.assertIn(
+            "002.png", Path(error.exception.log_path).read_text(encoding="utf-8")
+        )

@@ -32,6 +32,7 @@ import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
 from project_manager import Project, new_project
+from global_settings import config_dir
 from video_workspace import VideoWorkspace
 
 from batch_text_config import (
@@ -100,7 +101,7 @@ def saved_int(settings: dict, key: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
 UI_FONT_FALLBACKS = ("Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Noto Serif CJK SC", "Arial")
-SETTINGS_DIR = Path(os.environ.get("APPDATA", Path.home())) / "EdgeTTSGui"
+SETTINGS_DIR = config_dir()
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 PREVIEW_FILENAME = "edge_tts_preview.mp3"
 BATCH_ITEM_DELAY = 1.5        # 批量配音每项之间的间隔，避免连续请求被服务端限流

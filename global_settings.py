@@ -16,7 +16,29 @@ class SettingsError(ValueError):
 
 
 def config_dir():
-    return Path(os.environ.get("APPDATA", Path.home())) / "EdgeTTSGui"
+    configured = os.environ.get("APPDATA")
+    if configured:
+        return Path(configured) / "EdgeTTSGui"
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            buffer = ctypes.create_unicode_buffer(32768)
+            if (
+                ctypes.windll.shell32.SHGetFolderPathW(None, 26, None, 0, buffer) == 0
+                and buffer.value
+            ):
+                return Path(buffer.value) / "EdgeTTSGui"
+        except (OSError, AttributeError):
+            pass
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return Path(local) / "EdgeTTSGui"
+    try:
+        base = Path.home()
+    except RuntimeError:
+        base = Path(tempfile.gettempdir())
+    return base / "EdgeTTSGui"
 
 
 def atomic_json(path, data):

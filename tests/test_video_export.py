@@ -18,9 +18,9 @@ from video_renderer import render_images
 
 class ToolTests(unittest.TestCase):
     def test_missing_tool_message(self):
-        with patch("shutil.which", return_value=None), patch.dict(
-            "os.environ", {}, clear=True
-        ):
+        with patch("global_settings.GlobalSettings.read", return_value={}), patch(
+            "shutil.which", return_value=None
+        ), patch.dict("os.environ", {}, clear=True):
             with self.assertRaisesRegex(MediaError, "未找到 ffmpeg"):
                 executable("ffmpeg")
 
