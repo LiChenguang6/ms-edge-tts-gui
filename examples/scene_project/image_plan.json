@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "topic": "输入格式示例（占位图）",
+  "script_file": "script.txt",
+  "timing_mode": "tts",
+  "video": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "scenes": [
+    {
+      "id": "001",
+      "image_file": "images/001.png",
+      "script_line": 1,
+      "narration": "第一段解说文案。",
+      "start": null,
+      "end": null,
+      "motion": "none",
+      "prompt": "格式示例占位图；仅保留元数据，不调用模型。"
+    },
+    {
+      "id": "002",
+      "image_file": "images/002.png",
+      "script_line": 2,
+      "narration": "第二段解说文案。",
+      "start": null,
+      "end": null,
+      "motion": "none",
+      "prompt": "格式示例占位图；仅保留元数据，不调用模型。"
+    },
+    {
+      "id": "003",
+      "image_file": "images/003.png",
+      "script_line": 3,
+      "narration": "第三段解说文案。",
+      "start": null,
+      "end": null,
+      "motion": "none",
+      "prompt": "格式示例占位图；仅保留元数据，不调用模型。"
+    }
+  ]
+}

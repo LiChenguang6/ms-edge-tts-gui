@@ -48,6 +48,11 @@ jobs:
             $result = Get-Content $report -Raw | ConvertFrom-Json
             if ($result.status -ne 'passed') { throw 'Missing startup readiness report' }
           }
+      - name: Include license, guide and local input example
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE, LICENSE.zh.txt, NOTICE, SCENE_PROJECT_GUIDE.zh-CN.md -Destination dist/
+          Copy-Item examples -Destination dist/examples -Recurse
       - uses: actions/upload-artifact@v4
         with:
           name: EdgeTTSVideoStudio-Windows
