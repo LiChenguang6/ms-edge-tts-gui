@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Per-user atomic settings; independent of the executable's install directory."""
+
 from copy import deepcopy
 import json
 import os
@@ -10,16 +11,22 @@ import threading
 _LOCK = threading.RLock()
 
 
+class SettingsError(ValueError):
+    pass
+
+
 def config_dir():
-    return Path(os.environ.get('APPDATA', Path.home())) / 'EdgeTTSGui'
+    return Path(os.environ.get("APPDATA", Path.home())) / "EdgeTTSGui"
 
 
 def atomic_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=path.name+'.', suffix='.tmp', dir=path.parent)
+    fd, temporary = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=path.parent
+    )
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(data, stream, ensure_ascii=False, indent=2, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
@@ -30,12 +37,17 @@ def atomic_json(path, data):
 
 class GlobalSettings:
     def __init__(self, path=None):
-        self.path = Path(path) if path else config_dir()/'video-defaults.json'
+        self.path = Path(path) if path else config_dir() / "video-defaults.json"
 
     def read(self):
         try:
-            data = json.loads(self.path.read_text(encoding='utf-8-sig'))
-            return data if isinstance(data, dict) else {}
+            data = json.loads(self.path.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict):
+                return {}
+            for key in ("video", "style", "sound", "planning", "narration"):
+                if key in data and not isinstance(data[key], dict):
+                    data.pop(key)
+            return data
         except (OSError, ValueError):
             return {}
 
@@ -47,11 +59,21 @@ class GlobalSettings:
                     data[key] = {**data.get(key, {}), **deepcopy(value)}
                 else:
                     data[key] = value
-            atomic_json(self.path, data)
+            try:
+                atomic_json(self.path, data)
+            except OSError as exc:
+                raise SettingsError(
+                    f"无法保存用户配置 {self.path}：{exc}；请检查 AppData 目录写权限。"
+                ) from exc
         return data
 
     def remember_project(self, project):
         # Never save project media paths or imported script/prompt metadata as defaults.
-        return self.update(video=project.video, style=project.style, sound=project.sound,
-                           planning=project.planning, narration=project.narration,
-                           output_dir=project.output_dir)
+        return self.update(
+            video=project.video,
+            style=project.style,
+            sound=project.sound,
+            planning=project.planning,
+            narration=project.narration,
+            output_dir=project.output_dir,
+        )

@@ -4,7 +4,7 @@
 from pathlib import Path
 import math
 import tempfile
-from media_tools import MediaError, run_ffmpeg
+from media_tools import MediaError, ExportCancelled, run_ffmpeg, check_disk_space
 
 
 def image_filter(video, frames):
@@ -72,7 +72,9 @@ def validate_timeline(project):
     return start
 
 
-def render_images(project, output, cancel=None, progress=None, preview=False):
+def render_images(
+    project, output, cancel=None, progress=None, preview=False, status=None
+):
     duration = validate_timeline(project)
     settings = dict(project.video)
     if preview:
@@ -84,9 +86,21 @@ def render_images(project, output, cancel=None, progress=None, preview=False):
     fps = int(settings["fps"])
     with tempfile.TemporaryDirectory(prefix="edge-video-") as temp:
         root = Path(temp)
+        check_disk_space(root, max(16 * 1048576, int(duration * 1500000)))
         for n, clip in enumerate(project.images):
             start, end = round(clip.start * fps), round(clip.end * fps)
-            filters = image_filter(settings, end - start)
+            scene = getattr(clip, "scene_id", "") or str(n + 1)
+            if status:
+                status(
+                    f"处理场景 {scene} · 图片 {n+1}/{len(project.images)} · 剩余 {len(project.images)-n-1}：{Path(clip.path).name}"
+                )
+            filters = image_filter(
+                {
+                    **settings,
+                    "motion": getattr(clip, "motion", "") or settings["motion"],
+                },
+                end - start,
+            )
             if settings["transition"] == "fade":
                 fade = min(
                     float(settings["transition_duration"]), (end - start) / fps / 2
@@ -95,44 +109,59 @@ def render_images(project, output, cancel=None, progress=None, preview=False):
                     filters += f",fade=t=in:st=0:d={fade}"
                 if n < len(project.images) - 1:
                     filters += f",fade=t=out:st={(end-start)/fps-fade}:d={fade}"
-            run_ffmpeg(
-                [
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    fps,
-                    "-i",
-                    clip.path,
-                    "-vf",
-                    filters,
-                    "-frames:v",
-                    end - start,
-                    "-an",
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "veryfast",
-                    "-threads",
-                    "2",
-                    "-filter_complex_threads",
-                    "1",
-                    "-filter_threads",
-                    "1",
-                    root / f"{n}.mp4",
-                ],
-                cancel,
-                (
+            try:
+                run_ffmpeg(
+                    [
+                        *(
+                            [
+                                "-f",
+                                "lavfi",
+                                "-i",
+                                f"color=c=black:s={settings['width']}x{settings['height']}:r={fps}",
+                            ]
+                            if clip.skipped
+                            else ["-loop", "1", "-framerate", fps, "-i", clip.path]
+                        ),
+                        "-vf",
+                        filters,
+                        "-frames:v",
+                        end - start,
+                        "-an",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-threads",
+                        "2",
+                        "-filter_complex_threads",
+                        "1",
+                        "-filter_threads",
+                        "1",
+                        root / f"{n}.mp4",
+                    ],
+                    cancel,
                     (
-                        lambda value, n=n: progress(
-                            (n + value) / len(project.images) * 0.95
+                        (
+                            lambda value, n=n: progress(
+                                (n + value) / len(project.images) * 0.95
+                            )
                         )
-                    )
-                    if progress
-                    else None
-                ),
-                (end - start) / fps,
-                settings.get("ffmpeg", ""),
-            )
+                        if progress
+                        else None
+                    ),
+                    (end - start) / fps,
+                    settings.get("ffmpeg", ""),
+                )
+            except ExportCancelled:
+                raise
+            except MediaError as exc:
+                raise MediaError(
+                    str(exc),
+                    stage="图片分段渲染",
+                    scene=scene,
+                    command=getattr(exc, "command", None),
+                    log_path=getattr(exc, "log_path", ""),
+                ) from exc
         (root / "list.txt").write_text(
             "".join(f"file '{n}.mp4'\n" for n in range(len(project.images))),
             encoding="ascii",

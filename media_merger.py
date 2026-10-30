@@ -6,7 +6,14 @@ import re
 import shutil
 import tempfile
 import os
-from media_tools import MediaError, ExportCancelled, probe, run_ffmpeg
+from media_tools import (
+    MediaError,
+    ExportCancelled,
+    probe,
+    run_ffmpeg,
+    ensure_writable,
+    check_disk_space,
+)
 from video_renderer import render_images
 
 
@@ -85,6 +92,8 @@ def validate_output(project, output):
         project.audio,
         project.source_srt,
         project.subtitle_srt,
+        project.script_file,
+        project.plan_file,
         project.external_video,
         project.bgm,
         project.style.get("font_file", ""),
@@ -98,12 +107,32 @@ def validate_output(project, output):
 
 
 def export_video(
-    project, output, cancel=None, progress=None, preview=False, silent=False
+    project,
+    output,
+    cancel=None,
+    progress=None,
+    preview=False,
+    silent=False,
+    status=None,
 ):
     output = validate_output(project, output)
+    if project.mode == "scenes" and project.timing_conflict:
+        raise MediaError(project.timing_conflict, stage="场景时间冲突")
     if not silent and project.style["burn"] and not subtitle_cues(project):
         raise MediaError(
             "已勾选添加字幕，但没有可用字幕。请选择 SRT、生成配音字幕，或取消添加字幕。"
+        )
+    missing_scenes = [
+        c
+        for c in project.images
+        if c.scene_id and not c.skipped and not Path(c.path).is_file()
+    ]
+    if missing_scenes:
+        raise MediaError(
+            "\n".join(f"场景 {c.scene_id}：{c.path}" for c in missing_scenes)
+            + "\n请选择替换或暂时跳过图片，解说不会被删除。",
+            stage="检查场景图片",
+            scene=missing_scenes[0].scene_id,
         )
     if project.missing_media():
         raise MediaError(
@@ -118,7 +147,10 @@ def export_video(
             raise MediaError("配音文件没有音频流")
         if abs(info["duration"] - project.audio_duration) > 0.1:
             raise MediaError("配音时长已变化，请重新导入音频并分配图片时间")
-    output.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable(output.parent)
+    check_disk_space(
+        output.parent, max(16 * 1048576, int(project.audio_duration * 1500000))
+    )
     with tempfile.TemporaryDirectory(prefix="edge-compose-") as temp:
         root = Path(temp)
         if project.external_video:
@@ -135,6 +167,7 @@ def export_video(
                 cancel,
                 (lambda p: progress(p * 0.65)) if progress else None,
                 preview,
+                status=status,
             )
             duration = project.images[-1].end
         if silent:

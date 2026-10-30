@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+from contextlib import ExitStack
 from pathlib import Path
 import tempfile
 import unittest
@@ -16,8 +17,16 @@ class WorkspaceTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as folder, patch.object(
             app.App, "_start_background_jobs"
-        ):
+        ), ExitStack() as stack:
             root = Path(folder)
+            config = root / "AppData" / "EdgeTTSGui"
+            stack.enter_context(
+                patch.dict(os.environ, {"APPDATA": str(root / "AppData")})
+            )
+            stack.enter_context(patch.object(app, "SETTINGS_DIR", config))
+            stack.enter_context(
+                patch.object(app, "SETTINGS_FILE", config / "settings.json")
+            )
             srt = root / "测试.srt"
             srt.write_text(
                 "1\n00:00:00,000 --> 00:00:02,000\n你好。\n", encoding="utf-8-sig"
@@ -71,6 +80,7 @@ class WorkspaceTests(unittest.TestCase):
                 window._show_studio("audio")
                 window.update()
                 self.assertTrue(window._btn_generate.winfo_exists())
+                self._assert_scene_project(window, root)
                 self._assert_srt_inputs(window, root)
             finally:
                 window._on_close()
@@ -115,3 +125,123 @@ class WorkspaceTests(unittest.TestCase):
         window._add_batch_files([str(srt)])
         self.assertEqual(len(window._file_items), 1)
         self.assertNotIn("-->", window._file_items[0].text)
+
+    def _assert_scene_project(self, window, root):
+        import time
+        import shutil
+        from copy import deepcopy
+        from scene_audio import prepare_scene_audio
+        from global_settings import GlobalSettings
+        from test_scene_projects import fixture, FakeEngine
+
+        original = deepcopy(window.project)
+        folder = fixture(root / "一键视频 工程", 11, missing=3)
+        window._show_studio("images")
+        with patch(
+            "scene_workspace.filedialog.askdirectory", return_value=str(folder)
+        ), patch("scene_workspace.messagebox.showwarning") as warning:
+            window._video_workspace.import_video_project()
+            self.assertIn("003", str(warning.call_args))
+        window.update()
+        workspace = window._video_workspace
+        self.assertEqual(window.project.mode, "scenes")
+        self.assertEqual(len(workspace.tree.get_children()), 11)
+        self.assertEqual(workspace.tree.item("0", "values")[0], "001")
+        tool = shutil.which("ffmpeg")
+        with patch("video_workspace.filedialog.askopenfilename", return_value=tool):
+            workspace.choose_tool("ffmpeg")
+        self.assertTrue(Path(GlobalSettings().read()["video"]["ffmpeg"]).samefile(tool))
+        FakeEngine.calls = []
+
+        def prepare(project, cfg, cancel, progress, status):
+            return prepare_scene_audio(
+                project,
+                cfg,
+                cancel,
+                progress,
+                status,
+                engine_factory=FakeEngine,
+                request_interval=0,
+            )
+
+        with patch("scene_workspace.prepare_scene_audio", side_effect=prepare):
+            workspace.generate_scene_voice()
+            deadline = time.monotonic() + 30
+            while window._video_workspace.running and time.monotonic() < deadline:
+                window.update()
+                time.sleep(0.01)
+            self.assertFalse(window._video_workspace.running)
+        workspace = window._video_workspace
+        self.assertEqual(len(FakeEngine.calls), 11)
+        self.assertEqual(window.project.images[-1].end, window.project.audio_duration)
+        workspace.tree.selection_set("2")
+        with patch("scene_workspace.messagebox.askyesno", return_value=True):
+            workspace.skip_scene_image()
+        self.assertTrue(window.project.images[2].skipped)
+        self.assertEqual(len(window.project.cues), 11)
+        self.assertLessEqual(len(workspace.cache.cache), 64)
+        # A current voice/rate edit must override previously rendered audio.
+        window.project.style["burn"] = False
+        window._rate_var.set(10)
+        workspace = window._video_workspace
+        destination = folder / "output" / "重新配音.mp4"
+        with patch("scene_workspace.prepare_scene_audio", side_effect=prepare), patch(
+            "scene_workspace.filedialog.asksaveasfilename",
+            return_value=str(destination),
+        ):
+            workspace.generate_scene_voice(True)
+            deadline = time.monotonic() + 30
+            while window._video_workspace.running and time.monotonic() < deadline:
+                window.update()
+                time.sleep(0.01)
+        self.assertFalse(window._video_workspace.running)
+        self.assertTrue(destination.is_file())
+        self.assertEqual(len(FakeEngine.calls), 22)
+        destination2 = folder / "output" / "复用配音.mp4"
+        with patch(
+            "scene_workspace.prepare_scene_audio",
+            side_effect=AssertionError("existing voice must be reused"),
+        ), patch(
+            "scene_workspace.filedialog.asksaveasfilename",
+            return_value=str(destination2),
+        ):
+            window._video_workspace.generate_scene_voice(True)
+            deadline = time.monotonic() + 30
+            while window._video_workspace.running and time.monotonic() < deadline:
+                window.update()
+                time.sleep(0.01)
+        self.assertTrue(destination2.is_file())
+        self.assertEqual(len(FakeEngine.calls), 22)
+        workspace = window._video_workspace
+        window._rate_var.set(20)
+        before_cancel = len(FakeEngine.calls)
+
+        def slow_prepare(project, cfg, cancel, progress, status):
+            return prepare_scene_audio(
+                project,
+                cfg,
+                cancel,
+                progress,
+                status,
+                engine_factory=FakeEngine,
+                request_interval=10,
+            )
+
+        with patch("scene_workspace.prepare_scene_audio", side_effect=slow_prepare):
+            workspace.generate_scene_voice()
+            deadline = time.monotonic() + 5
+            while (
+                len(FakeEngine.calls) == before_cancel and time.monotonic() < deadline
+            ):
+                window.update()
+                time.sleep(0.01)
+            workspace.cancel_button.invoke()
+            deadline = time.monotonic() + 10
+            while window._video_workspace.running and time.monotonic() < deadline:
+                window.update()
+                time.sleep(0.01)
+        self.assertFalse(window._video_workspace.running)
+        self.assertLess(len(FakeEngine.calls), before_cancel + 11)
+        workspace = window._video_workspace
+        workspace.replace_project(original)
+        window._show_studio("audio")

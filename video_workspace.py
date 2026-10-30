@@ -2,6 +2,9 @@
 """Project-oriented CustomTkinter workspaces; all render jobs run off the UI thread."""
 
 from copy import deepcopy
+from collections import OrderedDict
+from PIL import ImageTk
+from scene_workspace import SceneWorkspaceMixin, invalidate_scene_audio
 from dataclasses import replace
 from pathlib import Path
 import json
@@ -30,7 +33,16 @@ from srt_parser import (
     sentence_boundaries,
 )
 from timeline_planner import plan_timeline, edit_boundary
-from media_tools import MediaError, ExportCancelled, executable, probe, run_ffmpeg
+from media_tools import (
+    MediaError,
+    ExportCancelled,
+    executable,
+    probe,
+    run_ffmpeg,
+    validate_tool,
+    ensure_writable,
+)
+from global_settings import GlobalSettings
 from media_merger import export_video, subtitle_cues
 
 
@@ -45,12 +57,15 @@ def open_path(path):
         )
 
 
-class VideoWorkspace(ctk.CTkFrame):
+class VideoWorkspace(SceneWorkspaceMixin, ctk.CTkFrame):
     def __init__(self, app, mode):
         super().__init__(app, fg_color=app._c("surface"), corner_radius=18)
         self.app, self.mode = app, mode
         self.running = False
         self.cancel = threading.Event()
+        self._cancel_button_event = self.cancel
+        self.row_photos = OrderedDict()
+        self.row_loading = False
         self.events = queue.Queue()
         self.cache = ThumbnailCache()
         self.buttons = []
@@ -63,6 +78,10 @@ class VideoWorkspace(ctk.CTkFrame):
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=6)
         actions = [
+            ("导入视频项目", self.import_video_project),
+            ("生成场景配音", self.generate_scene_voice),
+            ("一键配音并导出", lambda: self.generate_scene_voice(True)),
+            ("复用已有配音/SRT", self.reuse_scene_audio),
             ("打开工程", self.open_project),
             ("保存工程", self.save_project),
             ("导入 SRT", self.import_srt),
@@ -103,26 +122,51 @@ class VideoWorkspace(ctk.CTkFrame):
         table.grid_rowconfigure(0, weight=1)
         self.tree = ttk.Treeview(
             table,
-            columns=("number", "name", "start", "end", "duration", "sentence", "lock"),
-            show="headings",
+            columns=(
+                "number",
+                "name",
+                "narration",
+                "start",
+                "end",
+                "duration",
+                "sentence",
+                "lock",
+                "status",
+            ),
+            show="tree headings",
             selectmode="browse",
         )
         for key, label, width in [
-            ("number", "#", 30),
-            ("name", "图片", 140),
+            ("number", "场景 ID", 60),
+            ("name", "图片", 100),
+            ("narration", "解说文本", 150),
             ("start", "开始", 55),
             ("end", "结束", 55),
             ("duration", "秒", 45),
             ("sentence", "字幕范围", 65),
             ("lock", "锁定", 40),
+            ("status", "状态", 60),
         ]:
             self.tree.heading(key, text=label)
             self.tree.column(key, width=width, minwidth=25, stretch=key == "name")
+        self.tree.column("#0", width=66, minwidth=40, stretch=False)
+        self.tree.heading("#0", text="缩略图")
+        style = ttk.Style(self)
+        style.configure("Scene.Treeview", rowheight=42)
+        self.tree.configure(style="Scene.Treeview")
         self.tree.grid(row=0, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
+        scroll = ttk.Scrollbar(table, orient="vertical", command=self.scroll_tree)
         scroll.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=scroll.set)
+        horizontal = ttk.Scrollbar(table, orient="horizontal", command=self.tree.xview)
+        horizontal.grid(row=1, column=0, sticky="ew")
+        self.tree.configure(xscrollcommand=horizontal.set)
         self.tree.bind("<<TreeviewSelect>>", self.select)
+        self.tree.bind(
+            "<MouseWheel>",
+            lambda e: self.after(80, self.load_visible_thumbnails),
+            add="+",
+        )
         self.tree.bind(
             "<ButtonPress-1>",
             lambda e: setattr(self, "drag_row", self.tree.identify_row(e.y)),
@@ -172,8 +216,16 @@ class VideoWorkspace(ctk.CTkFrame):
         self.slider.set(0)
         right = ctk.CTkScrollableFrame(self, fg_color=app._c("surface_alt"))
         right.grid(row=1, column=1, sticky="nsew", padx=(5, 10))
+        for text, action in [
+            ("编辑场景解说", self.edit_scene),
+            ("暂时跳过图片", self.skip_scene_image),
+            ("恢复场景自动时间", self.reset_scene_timing),
+        ]:
+            self.button(right, text, action).pack(fill="x", pady=3)
         self.preview_label = ctk.CTkLabel(right, text="选择图片预览", height=120)
         self.preview_label.pack(pady=4)
+        self.scene_detail = ctk.CTkLabel(right, text="", wraplength=280, justify="left")
+        self.scene_detail.pack(fill="x", pady=4)
         self.settings_form(right)
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=4)
@@ -184,9 +236,10 @@ class VideoWorkspace(ctk.CTkFrame):
             ("开始导出", self.export),
         ]:
             self.button(bottom, text, command, width=90).pack(side="left", padx=3)
-        ctk.CTkButton(bottom, text="取消", width=60, command=self.cancel.set).pack(
-            side="left", padx=3
+        self.cancel_button = ctk.CTkButton(
+            bottom, text="取消", width=60, command=self.cancel.set
         )
+        self.cancel_button.pack(side="left", padx=3)
         self.progress = ctk.CTkProgressBar(self)
         self.progress.grid(row=3, column=0, columnspan=2, sticky="ew", padx=15)
         self.progress.set(0)
@@ -216,7 +269,13 @@ class VideoWorkspace(ctk.CTkFrame):
     def error(self, exc):
         self.status.configure(text=str(exc)[-1200:])
         self.app.log("[视频] " + str(exc))
-        messagebox.showerror("视频工程", str(exc)[-6000:], parent=self)
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("视频处理错误 — 完整诊断")
+        dialog.geometry("850x500")
+        box = ctk.CTkTextbox(dialog, wrap="word")
+        box.pack(fill="both", expand=True, padx=12, pady=12)
+        box.insert("1.0", str(exc))
+        box.configure(state="disabled")
 
     def entry(self, parent, label, group, key, options=None):
         row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -243,6 +302,7 @@ class VideoWorkspace(ctk.CTkFrame):
             ("minimum", "最短时长"),
             ("maximum", "最长时长"),
             ("target", "目标时长（0=配音）"),
+            ("paragraph_pause", "段落停顿"),
         ]:
             self.entry(parent, label, "planning", key)
         ctk.CTkLabel(
@@ -250,8 +310,14 @@ class VideoWorkspace(ctk.CTkFrame):
         ).pack(anchor="w", pady=(12, 0))
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x")
+        import math
+
+        w, h = int(self.project.video["width"]), int(self.project.video["height"])
+        divisor = math.gcd(w, h)
+        self.resolution_var = tk.StringVar(value=f"{w}×{h} · {w//divisor}:{h//divisor}")
         ctk.CTkOptionMenu(
             row,
+            variable=self.resolution_var,
             values=[
                 "1080×1920 · 9:16",
                 "720×1280 · 9:16",
@@ -391,6 +457,10 @@ class VideoWorkspace(ctk.CTkFrame):
             updates[(group, key)] = value
         for (group, key), value in updates.items():
             getattr(self.project, group)[key] = value
+        from dataclasses import asdict
+
+        self.project.narration = asdict(self.app._build_cfg())
+        GlobalSettings().remember_project(self.project)
 
     def preset(self, text):
         w, h = text.split(" · ")[0].split("×")
@@ -404,7 +474,10 @@ class VideoWorkspace(ctk.CTkFrame):
     def choose_tool(self, key):
         path = filedialog.askopenfilename(title=f"选择 {key}.exe")
         if path:
-            self.project.video[key] = path
+            verified = validate_tool(key, path)
+            self.project.video[key] = verified
+            GlobalSettings().update(video={key: verified})
+            self.status.configure(text=f"{key} 已验证并永久保存：{verified}")
 
     def choose_font(self):
         path = filedialog.askopenfilename(filetypes=[("字体", "*.ttf *.ttc *.otf")])
@@ -513,6 +586,7 @@ class VideoWorkspace(ctk.CTkFrame):
         return int(selection[0])
 
     def refresh(self):
+        self.row_photos.clear()
         if hasattr(self, "subtitle_info"):
             self.subtitle_info.configure(
                 text=f'已选 SRT：{Path(self.project.subtitle_srt).name or "未选择"} · {len(self.project.subtitle_cues)} 条字幕\n仅用于视频字幕，不修改原配音文字或图片时间轴。'
@@ -524,13 +598,19 @@ class VideoWorkspace(ctk.CTkFrame):
                 "end",
                 iid=str(n),
                 values=(
-                    n + 1,
+                    clip.scene_id or n + 1,
                     Path(clip.path).name,
-                    f"{clip.start:.3f}",
-                    f"{clip.end:.3f}",
-                    f"{clip.end-clip.start:.3f}",
+                    clip.narration,
+                    f"{clip.start:.3f}" if clip.end > clip.start else "--",
+                    f"{clip.end:.3f}" if clip.end > clip.start else "--",
+                    f"{clip.end-clip.start:.3f}" if clip.end > clip.start else "--",
                     f"{clip.sentence_start}–{clip.sentence_end}",
                     "✓" if clip.locked else "",
+                    (
+                        "跳过图片/保留解说"
+                        if clip.skipped
+                        else ("缺图" if not Path(clip.path).is_file() else clip.status)
+                    ),
                 ),
             )
         self.info.configure(
@@ -554,11 +634,63 @@ class VideoWorkspace(ctk.CTkFrame):
             )
         )
 
+        if self.project.mode == "scenes":
+            self.status.configure(
+                text=self.project.timing_conflict
+                or (
+                    f"场景工程：{len(self.project.images)} 段解说，实际配音 {self.project.audio_duration:.6f}s"
+                    if self.project.audio
+                    else "场景模式：请生成场景配音或复用已有音频与 SRT；不按图片平均分配。"
+                )
+            )
+        self.after(50, self.load_visible_thumbnails)
+
+    def scroll_tree(self, *args):
+        self.tree.yview(*args)
+        self.after(60, self.load_visible_thumbnails)
+
+    def load_visible_thumbnails(self):
+        if self.row_loading or not self.tree.winfo_exists():
+            return
+        children = self.tree.get_children()
+        if not children:
+            return
+        first = max(0, int(self.tree.yview()[0] * len(children)))
+        items = [
+            (row, self.project.images[int(row)].path)
+            for row in children[first : first + 14]
+            if row not in self.row_photos
+            and Path(self.project.images[int(row)].path).is_file()
+        ]
+        if not items:
+            return
+        self.row_loading = True
+
+        def load():
+            for row, path in items:
+                try:
+                    self.events.put(
+                        (
+                            "row_thumbnail",
+                            row,
+                            path,
+                            self.cache.get(path, (64, 38)).copy(),
+                        )
+                    )
+                except Exception:
+                    pass
+            self.events.put(("row_thumbnails_done",))
+
+        threading.Thread(target=load, daemon=True).start()
+
     def select(self, event=None):
         if not self.tree.selection():
             return
         index = self.selected()
         clip = self.project.images[index]
+        self.scene_detail.configure(
+            text=f"场景 {clip.scene_id}\n{clip.narration}" if clip.scene_id else ""
+        )
         self.start_var.set(f"{clip.start:.3f}")
         self.end_var.set(f"{clip.end:.3f}")
         self.lock_var.set(clip.locked)
@@ -633,7 +765,10 @@ class VideoWorkspace(ctk.CTkFrame):
         if self.running:
             return
         move_image(self.project, index, destination)
-        self.reflow()
+        if self.project.mode == "scenes":
+            invalidate_scene_audio(self.project)
+        else:
+            self.reflow()
         self.refresh()
         dest = max(0, min(destination, len(self.project.images) - 1))
         self.tree.selection_set(str(dest))
@@ -658,6 +793,10 @@ class VideoWorkspace(ctk.CTkFrame):
             self.reorder(int(source), int(target))
 
     def duplicate(self):
+        if self.project.mode == "scenes":
+            raise MediaError(
+                "场景 ID 必须唯一；请在脚本和 image_plan.json 中添加新场景后重新导入"
+            )
         n = self.selected()
         self.project.images.insert(
             n + 1,
@@ -680,9 +819,14 @@ class VideoWorkspace(ctk.CTkFrame):
             check = Project()
             add_images(check, [path])
             self.project.images[n].path = check.images[0].path
+            self.project.images[n].skipped = False
+            self.project.images[n].status = "ready"
             self.refresh()
 
     def delete(self):
+        if self.project.mode == "scenes":
+            self.skip_scene_image()
+            return
         del self.project.images[self.selected()]
         self.project.manual_order = True
         self.reflow()
@@ -713,6 +857,20 @@ class VideoWorkspace(ctk.CTkFrame):
         ):
             return
         draft.images[index].locked = self.lock_var.get()
+        if draft.mode == "scenes":
+            clip = draft.images[index]
+            clip.requested_start = clip.start
+            clip.requested_end = clip.end
+            clip.timing_source = "manual"
+            clip.timing_origins.update(start="manual", end="manual")
+            if index:
+                draft.images[index - 1].requested_end = clip.start
+                draft.images[index - 1].timing_origins["end"] = "manual"
+            if index + 1 < len(draft.images):
+                draft.images[index + 1].requested_start = clip.end
+                draft.images[index + 1].timing_origins["start"] = "manual"
+            draft.timing_conflict = ""
+            draft.timing_warnings = ["手动场景边界位于解说中间"] if exceptional else []
         self.app.project = draft
         self.refresh()
         self.tree.selection_set(str(index))
@@ -741,12 +899,19 @@ class VideoWorkspace(ctk.CTkFrame):
                 )
             self.vars.clear()
             self.app.project = project
+            self.app._apply_project_narration(project)
             self.app._textbox.delete("1.0", "end")
             self.app._textbox.insert(
-                "1.0", spoken_text(project.source_cues or project.cues)
+                "1.0",
+                (
+                    "\n".join(c.narration for c in project.images)
+                    if project.mode == "scenes"
+                    else spoken_text(project.source_cues or project.cues)
+                ),
             )
             self.app._on_text_changed()
-            self.app._show_studio(self.mode)
+            GlobalSettings().update(recent_project_dir=str(Path(path).parent))
+            self.app._rebuild_ui()
             if project.missing_media():
                 messagebox.showwarning(
                     "缺失素材",
@@ -774,7 +939,9 @@ class VideoWorkspace(ctk.CTkFrame):
     def output_folder(self):
         path = filedialog.askdirectory()
         if path:
+            ensure_writable(path)
             self.project.output_dir = path
+            GlobalSettings().update(output_dir=path)
             self.refresh()
 
     def import_bgm(self):
@@ -787,7 +954,7 @@ class VideoWorkspace(ctk.CTkFrame):
         if path:
             self.set_media("external_video", path)
 
-    def export(self, preview=False, silent=False):
+    def export(self, preview=False, silent=False, output_override=None):
         self.collect()
         if not self.project.external_video and (
             not self.project.images or self.project.images[-1].end <= 0
@@ -800,7 +967,7 @@ class VideoWorkspace(ctk.CTkFrame):
 
             output = str(folder / (uuid.uuid4().hex + ".mp4"))
         else:
-            output = filedialog.asksaveasfilename(
+            output = output_override or filedialog.asksaveasfilename(
                 initialdir=self.project.output_dir or None,
                 defaultextension=".mp4",
                 filetypes=[("MP4 视频", "*.mp4")],
@@ -809,6 +976,20 @@ class VideoWorkspace(ctk.CTkFrame):
                 return
             self.project.output_dir = str(Path(output).parent)
         snapshot = deepcopy(self.project)
+        if (
+            snapshot.mode == "scenes"
+            and snapshot.timing_warnings
+            and not messagebox.askyesno(
+                "手动边界确认",
+                "\n".join(snapshot.timing_warnings) + "\n仍按手动时间导出？",
+                parent=self,
+            )
+        ):
+            return
+        if snapshot.mode == "scenes":
+            from scene_project import write_resolved_plan
+
+            write_resolved_plan(snapshot)
         duration = (
             snapshot.images[-1].end
             if snapshot.images and not snapshot.external_video
@@ -827,7 +1008,8 @@ class VideoWorkspace(ctk.CTkFrame):
             )
         ):
             return
-        self.cancel = threading.Event()
+        self.cancel = self._cancel_button_event
+        self.cancel.clear()
         self.running = True
         self.progress.set(0)
         for button in self.buttons:
@@ -845,6 +1027,7 @@ class VideoWorkspace(ctk.CTkFrame):
                     lambda p: self.events.put(("progress", p)),
                     preview,
                     silent,
+                    status=lambda text: self.events.put(("scene_status", text)),
                 )
                 self.events.put(("done", result, preview))
             except Exception as exc:
@@ -857,7 +1040,29 @@ class VideoWorkspace(ctk.CTkFrame):
             while True:
                 event = self.events.get_nowait()
                 kind = event[0]
-                if kind == "progress":
+                if kind in ("scene_ready", "scene_ready_confirm"):
+                    self.receive_scene_result(event)
+                    return
+                elif kind == "row_thumbnail":
+                    _, row, path, img = event
+                    if (
+                        self.tree.exists(row)
+                        and int(row) < len(self.project.images)
+                        and self.project.images[int(row)].path == path
+                    ):
+                        photo = ImageTk.PhotoImage(img, master=self)
+                        self.row_photos[row] = photo
+                        self.tree.item(row, image=photo)
+                        while len(self.row_photos) > 24:
+                            old, _ = self.row_photos.popitem(last=False)
+                            if self.tree.exists(old):
+                                self.tree.item(old, image="")
+                elif kind == "row_thumbnails_done":
+                    self.row_loading = False
+                    self.after(20, self.load_visible_thumbnails)
+                elif kind == "scene_status":
+                    self.status.configure(text=event[1])
+                elif kind == "progress":
                     self.progress.set(event[1])
                 elif kind in ("thumbnail", "thumbnail_error"):
                     self.thumb_loading = False
