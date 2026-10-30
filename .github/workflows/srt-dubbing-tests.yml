@@ -20,8 +20,22 @@ jobs:
           python-version: "3.11"
           cache: "pip"
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements-dev.txt
       - name: Compile Python sources
         run: python -m compileall -q app.py tts_engine.py srt_dubbing.py tests
       - name: Run all offline tests
         run: python -m unittest discover -s tests -v
+      - name: Build unsigned Windows portable test EXE
+        run: >-
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name EdgeTTSGui-SRT-Test --icon assets/app.ico
+          --hidden-import docx --hidden-import pypdf
+          --hidden-import miniaudio --hidden-import lameenc
+          --hidden-import cffi --hidden-import _cffi_backend app.py
+      - name: Upload portable test EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: EdgeTTSGui-SRT-Test-Windows
+          path: dist/EdgeTTSGui-SRT-Test.exe
+          if-no-files-found: error
+          retention-days: 7
